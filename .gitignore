@@ -1,5 +1,8 @@
 node_modules/
 .env
+.env.*
 dist/
 build/
 coverage/
+*_db_backup.sql
+!.env.example
