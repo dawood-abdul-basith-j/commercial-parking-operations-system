@@ -1133,24 +1133,56 @@ function App() {
 
   if (activeTab === "404") {
     return (
-      <div className="app-shell" style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", padding: "20px" }}>
-        <section className="panel not-found-panel" style={{ maxWidth: "600px", width: "100%" }}>
-          <div className="not-found-content">
-            <div className="not-found-badge">404 ERROR</div>
-            <h1 className="not-found-title">Page Not Found</h1>
-            <p className="not-found-desc">
-              The requested route <code>/{currentRoutePath}</code> does not exist, was moved, or is not available.
+      <div className="notfound-page">
+        <header className="notfound-topbar">
+          <div className="brand">
+            <div className="brand-icon-wrap">
+              <IconParking className="brand-icon" />
+            </div>
+            <div className="brand-text">
+              <span className="brand-title">CPOS</span>
+              <span className="brand-tag">Operations Portal</span>
+            </div>
+          </div>
+          <div className="notfound-status-chip">
+            <span className="notfound-status-dot"></span>
+            <span>Route Perimeter Offline</span>
+          </div>
+        </header>
+
+        <div className="notfound-card-wrapper">
+          <div className="notfound-card">
+            <div className="notfound-badge">404 // UNRESOLVED SECTOR</div>
+            <div className="notfound-hero-num">404</div>
+            <h1 className="notfound-headline">Lost in the Facility?</h1>
+            <p className="notfound-explanation">
+              The navigational coordinates for{" "}
+              <span className="notfound-path-pill">/{currentRoutePath}</span>{" "}
+              could not be resolved. This sector does not exist, was relocated, or requires elevated clearance.
             </p>
-            <div className="not-found-actions">
+            <div className="notfound-actions">
               <button
-                className="primary-button"
-                onClick={() => navigateToTab("dashboard")}
+                className="notfound-primary-btn"
+                onClick={() => {
+                  if (token && user) {
+                    navigateToTab("dashboard");
+                  } else {
+                    handleSetMode("login");
+                    setActiveTab("auth");
+                  }
+                }}
               >
                 {token && user ? "← Return to Core Dashboard" : "← Return to Sign In"}
               </button>
             </div>
           </div>
-        </section>
+        </div>
+
+        <footer className="notfound-footer">
+          <span>HTTP STATUS: 404 NOT_FOUND</span>
+          <span>FACILITY TELEMETRY: OUT_OF_BOUNDS</span>
+          <span>CPOS ENTERPRISE v1.0.0</span>
+        </footer>
       </div>
     );
   }
