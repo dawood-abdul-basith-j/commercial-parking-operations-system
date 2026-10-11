@@ -273,6 +273,197 @@ async function login(req, res) {
   }
 }
 
+// Authenticate with Google ID token, provision customer if first time, and issue JWT.
+async function googleLogin(req, res) {
+  const { credential } = req.body || {};
+
+  if (!isNonEmptyString(credential)) {
+    return res.status(400).json({
+      success: false,
+      message: "Google credential token is required.",
+    });
+  }
+
+  const clientId = process.env.GOOGLE_CLIENT_ID;
+
+  if (!clientId) {
+    return res.status(500).json({
+      success: false,
+      message: "GOOGLE_CLIENT_ID is not configured on the backend.",
+    });
+  }
+
+  let payload;
+
+  try {
+    const { OAuth2Client } = require("google-auth-library");
+    const client = new OAuth2Client(clientId);
+    const ticket = await client.verifyIdToken({
+      idToken: credential,
+      audience: clientId,
+    });
+    payload = ticket.getPayload();
+  } catch (verifyError) {
+    console.error("Google token verification failed:", verifyError.message);
+    return res.status(401).json({
+      success: false,
+      message: "Invalid or expired Google credential.",
+    });
+  }
+
+  const googleEmail = (payload.email || "").trim().toLowerCase();
+  const googleName = payload.name || "Google User";
+
+  if (!googleEmail) {
+    return res.status(400).json({
+      success: false,
+      message: "Google account does not provide an email address.",
+    });
+  }
+
+  let connection;
+  let transactionStarted = false;
+
+  try {
+    connection = await db.getConnection();
+
+    // Check if user already exists
+    const [existingUsers] = await connection.execute(
+      `SELECT
+         u.user_id,
+         u.full_name,
+         u.email,
+         u.account_status,
+         r.role_name
+       FROM users u
+       JOIN roles r ON r.role_id = u.role_id
+       WHERE u.email = ?
+       LIMIT 1`,
+      [googleEmail]
+    );
+
+    let user;
+
+    if (existingUsers.length > 0) {
+      user = existingUsers[0];
+
+      if (user.account_status !== "ACTIVE") {
+        return res.status(403).json({
+          success: false,
+          message: "This account is not active.",
+        });
+      }
+    } else {
+      // First-time Google user: auto-provision as CUSTOMER
+      await connection.beginTransaction();
+      transactionStarted = true;
+
+      const [roles] = await connection.execute(
+        "SELECT role_id FROM roles WHERE role_name = ? LIMIT 1",
+        ["CUSTOMER"]
+      );
+
+      if (roles.length === 0) {
+        await connection.rollback();
+        transactionStarted = false;
+        return res.status(500).json({
+          success: false,
+          message: "Customer role is not configured.",
+        });
+      }
+
+      // Generate a random secure placeholder password hash for OAuth accounts
+      const randomSecret = require("crypto").randomBytes(32).toString("hex");
+      const passwordHash = await bcrypt.hash(randomSecret, 12);
+
+      const [userResult] = await connection.execute(
+        `INSERT INTO users (
+          role_id,
+          full_name,
+          email,
+          password_hash,
+          account_status
+        ) VALUES (?, ?, ?, ?, 'ACTIVE')`,
+        [roles[0].role_id, googleName.trim(), googleEmail, passwordHash]
+      );
+
+      await connection.execute(
+        `INSERT INTO customers (
+          user_id,
+          address,
+          driving_license_number,
+          loyalty_points
+        ) VALUES (?, 'Google OAuth User', NULL, 0)`,
+        [userResult.insertId]
+      );
+
+      await writeAuditLog(connection, {
+        userId: userResult.insertId,
+        moduleName: "AUTH",
+        action: "CUSTOMER_REGISTERED_GOOGLE",
+        ipAddress: req.ip,
+      });
+
+      await connection.commit();
+      transactionStarted = false;
+
+      user = {
+        user_id: userResult.insertId,
+        full_name: googleName.trim(),
+        email: googleEmail,
+        role_name: "CUSTOMER",
+      };
+    }
+
+    // Audit successful login
+    await writeAuditLog(connection, {
+      userId: user.user_id,
+      moduleName: "AUTH",
+      action: "LOGIN_SUCCESS_GOOGLE",
+      ipAddress: req.ip,
+    });
+
+    const token = jwt.sign(
+      { role: user.role_name },
+      getJwtSecret(),
+      {
+        subject: String(user.user_id),
+        expiresIn: process.env.JWT_EXPIRES_IN || "1h",
+        algorithm: "HS256",
+      }
+    );
+
+    return res.status(200).json({
+      success: true,
+      message: "Google authentication successful.",
+      token,
+      user: {
+        user_id: user.user_id,
+        full_name: user.full_name,
+        email: user.email,
+        role: user.role_name,
+      },
+    });
+  } catch (error) {
+    if (connection && transactionStarted) {
+      try {
+        await connection.rollback();
+      } catch (rollbackError) {
+        console.error("Google login rollback failed.");
+      }
+    }
+
+    console.error("Google authentication failed:", error.message);
+
+    return res.status(500).json({
+      success: false,
+      message: "Unable to authenticate with Google.",
+    });
+  } finally {
+    if (connection) connection.release();
+  }
+}
+
 // Return the profile already resolved by authentication middleware.
 function getMe(req, res) {
   return res.status(200).json({
@@ -284,5 +475,6 @@ function getMe(req, res) {
 module.exports = {
   register,
   login,
+  googleLogin,
   getMe,
 };
