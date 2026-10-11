@@ -649,21 +649,35 @@ function App() {
     }
   }, [user]);
 
-  // Prevent browser back arrow from exiting the app
+  // URL Route Synchronization (#/dashboard, #/gate, #/queue, etc.)
+  function getTabFromHash() {
+    const hash = window.location.hash.replace(/^#\/?/, "").trim().toLowerCase();
+    const VALID_TABS = ["dashboard", "gate", "queue", "valet", "violations", "analytics"];
+    return VALID_TABS.includes(hash) ? hash : "dashboard";
+  }
+
+  const [activeTab, setActiveTab] = useState(getTabFromHash);
+
+  function navigateToTab(tab) {
+    setActiveTab(tab);
+    window.location.hash = `#/${tab}`;
+  }
+
+  // Listen to browser URL route changes (Back / Forward buttons, URL typing)
   useEffect(() => {
-    // Push state so back button is trapped inside the application
-    window.history.pushState({ cpos: true }, "", window.location.href);
-
-    const handlePopState = () => {
-      // Re-push state so user stays in CPOS
-      window.history.pushState({ cpos: true }, "", window.location.href);
+    const handleHashChange = () => {
+      const tab = getTabFromHash();
+      setActiveTab(tab);
     };
 
-    window.addEventListener("popstate", handlePopState);
+    window.addEventListener("hashchange", handleHashChange);
+    if (!window.location.hash && token) {
+      window.location.hash = "#/dashboard";
+    }
     return () => {
-      window.removeEventListener("popstate", handlePopState);
+      window.removeEventListener("hashchange", handleHashChange);
     };
-  }, []);
+  }, [token]);
 
   const [auditLogs, setAuditLogs] = useState([]);
   const [auditPagination, setAuditPagination] = useState(null);
@@ -674,9 +688,6 @@ function App() {
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState("ALL");
   const [selectedFloor, setSelectedFloor] = useState("L1");
-
-  // Multi-Module Operations State
-  const [activeTab, setActiveTab] = useState("dashboard");
   const [modalQrData, setModalQrData] = useState(null);
   const [modalInvoiceData, setModalInvoiceData] = useState(null);
   const [queueData, setQueueData] = useState([]);
@@ -1187,40 +1198,40 @@ function App() {
           <nav className="srs-module-nav">
             <button
               className={`module-tab-btn ${activeTab === "dashboard" ? "active" : ""}`}
-              onClick={() => setActiveTab("dashboard")}
+              onClick={() => navigateToTab("dashboard")}
             >
               📊 Core Dashboard
             </button>
             {isStaff && (
               <button
                 className={`module-tab-btn ${activeTab === "gate" ? "active" : ""}`}
-                onClick={() => setActiveTab("gate")}
+                onClick={() => navigateToTab("gate")}
               >
                 🎟️ Gate Scanner (FR-3.3)
               </button>
             )}
             <button
               className={`module-tab-btn ${activeTab === "queue" ? "active" : ""}`}
-              onClick={() => setActiveTab("queue")}
+              onClick={() => navigateToTab("queue")}
             >
               ⏳ Virtual Queue (FR-3.6)
             </button>
             <button
               className={`module-tab-btn ${activeTab === "valet" ? "active" : ""}`}
-              onClick={() => setActiveTab("valet")}
+              onClick={() => navigateToTab("valet")}
             >
               🔑 Valet Parking (FR-3.7)
             </button>
             <button
               className={`module-tab-btn ${activeTab === "violations" ? "active" : ""}`}
-              onClick={() => setActiveTab("violations")}
+              onClick={() => navigateToTab("violations")}
             >
               ⚠️ Violations (FR-3.8)
             </button>
             {(role === "BRANCH_MANAGER" || isSuperAdmin) && (
               <button
                 className={`module-tab-btn ${activeTab === "analytics" ? "active" : ""}`}
-                onClick={() => setActiveTab("analytics")}
+                onClick={() => navigateToTab("analytics")}
               >
                 📈 Analytics & Reports (FR-3.9)
               </button>
@@ -1942,7 +1953,7 @@ function App() {
                   {!isFacilityFull && (
                     <button
                       className="secondary-button"
-                      onClick={() => setActiveTab("dashboard")}
+                      onClick={() => navigateToTab("dashboard")}
                     >
                       📊 Book Slot Directly ({vacantSlotsCount} Available)
                     </button>
