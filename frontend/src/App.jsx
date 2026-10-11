@@ -649,33 +649,48 @@ function App() {
     }
   }, [user]);
 
-  // URL Route Synchronization (#/dashboard, #/gate, #/queue, etc.)
-  function getTabFromHash() {
-    const hash = window.location.hash.replace(/^#\/?/, "").trim().toLowerCase();
-    const VALID_TABS = ["dashboard", "gate", "queue", "valet", "violations", "analytics"];
-    return VALID_TABS.includes(hash) ? hash : "dashboard";
+  // URL Route Synchronization & 404 Route Detection
+  function resolveRoute() {
+    let path = window.location.hash.replace(/^#\/?/, "").trim();
+    if (!path && window.location.pathname && window.location.pathname !== "/") {
+      path = window.location.pathname.replace(/^\//, "").trim();
+    }
+    const clean = path.toLowerCase();
+    if (!clean || clean === "dashboard") return { tab: "dashboard", raw: path || "dashboard" };
+
+    const KNOWN_TABS = ["dashboard", "gate", "queue", "valet", "violations", "analytics"];
+    if (KNOWN_TABS.includes(clean)) {
+      return { tab: clean, raw: path };
+    }
+    return { tab: "404", raw: path };
   }
 
-  const [activeTab, setActiveTab] = useState(getTabFromHash);
+  const initialRoute = resolveRoute();
+  const [activeTab, setActiveTab] = useState(initialRoute.tab);
+  const [currentRoutePath, setCurrentRoutePath] = useState(initialRoute.raw);
 
   function navigateToTab(tab) {
     setActiveTab(tab);
+    setCurrentRoutePath(tab);
     window.location.hash = `#/${tab}`;
   }
 
   // Listen to browser URL route changes (Back / Forward buttons, URL typing)
   useEffect(() => {
-    const handleHashChange = () => {
-      const tab = getTabFromHash();
-      setActiveTab(tab);
+    const handleRouteChange = () => {
+      const route = resolveRoute();
+      setActiveTab(route.tab);
+      setCurrentRoutePath(route.raw);
     };
 
-    window.addEventListener("hashchange", handleHashChange);
+    window.addEventListener("hashchange", handleRouteChange);
+    window.addEventListener("popstate", handleRouteChange);
     if (!window.location.hash && token) {
       window.location.hash = "#/dashboard";
     }
     return () => {
-      window.removeEventListener("hashchange", handleHashChange);
+      window.removeEventListener("hashchange", handleRouteChange);
+      window.removeEventListener("popstate", handleRouteChange);
     };
   }, [token]);
 
@@ -2218,6 +2233,27 @@ function App() {
                   <p>Calculating live facility analytics...</p>
                 </div>
               )}
+            </section>
+          )}
+
+          {/* 404 NOT FOUND VIEW */}
+          {activeTab === "404" && (
+            <section className="panel not-found-panel">
+              <div className="not-found-content">
+                <div className="not-found-badge">404 ERROR</div>
+                <h2 className="not-found-title">Page Not Found</h2>
+                <p className="not-found-desc">
+                  The requested route <code>/{currentRoutePath}</code> does not exist, was moved, or requires privileges not assigned to your current role ({user.role}).
+                </p>
+                <div className="not-found-actions">
+                  <button
+                    className="primary-button"
+                    onClick={() => navigateToTab("dashboard")}
+                  >
+                    ← Return to Core Dashboard
+                  </button>
+                </div>
+              </div>
             </section>
           )}
 

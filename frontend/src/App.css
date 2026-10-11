@@ -2242,3 +2242,71 @@ select:focus {
   line-height: 1.4;
 }
 
+/* --------------------------------------------------------------------------
+   22. 404 Not Found Page Component
+   -------------------------------------------------------------------------- */
+.not-found-panel {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 64px 32px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-default);
+  border-radius: 20px;
+  box-shadow: var(--shadow-sm);
+  margin-top: 10px;
+}
+
+.not-found-content {
+  max-width: 520px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+}
+
+.not-found-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 6px 16px;
+  background-color: var(--danger-bg);
+  border: 1px solid var(--danger-border);
+  color: var(--danger-text);
+  border-radius: 9999px;
+  font-size: 0.8rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.not-found-title {
+  font-size: 2.2rem;
+  font-weight: 800;
+  letter-spacing: -0.04em;
+  color: var(--text-primary);
+  margin: 0;
+}
+
+.not-found-desc {
+  font-size: 0.95rem;
+  color: var(--text-secondary);
+  line-height: 1.6;
+  margin: 0;
+}
+
+.not-found-desc code {
+  background: var(--bg-surface-subtle);
+  border: 1px solid var(--border-default);
+  padding: 2px 8px;
+  border-radius: 6px;
+  font-family: monospace;
+  font-size: 0.88rem;
+  color: var(--danger-text);
+}
+
+.not-found-actions {
+  margin-top: 12px;
+}
+
+
