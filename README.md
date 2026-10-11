@@ -394,4 +394,4 @@ npm run build
 
 ## 📄 License & Attribution
 
-Developed under the **MIT License**. Built as a reference implementation for commercial parking operations and facility automation.
+Developed under the **Apache License 2.0**. Built as a reference implementation for commercial parking operations and facility automation.
