@@ -8,13 +8,16 @@ const {
   updateBookingStatus,
 } = require("../controllers/bookingController");
 
+const { authenticateToken } = require("../middleware/authMiddleware");
+
 const router = express.Router();
+
+// All booking endpoints require a valid JWT.
+router.use(authenticateToken);
 
 router.post("/", createBooking);
 router.get("/", getAllBookings);
 router.get("/:id", getBookingById);
-
-// Update booking status
 router.patch("/:id/status", updateBookingStatus);
 
 module.exports = router;

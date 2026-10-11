@@ -3,6 +3,136 @@ const db = require("../config/db");
 
 const ACTIVE_BOOKING_STATUSES = ["PENDING", "CONFIRMED", "ACTIVE"];
 
+const ALLOWED_STATUS_TRANSITIONS = {
+  PENDING: ["CONFIRMED", "CANCELLED"],
+  CONFIRMED: ["CANCELLED", "ACTIVE"],
+  ACTIVE: ["COMPLETED"],
+  CANCELLED: [],
+  COMPLETED: [],
+};
+
+function normalizeRole(role) {
+  return String(role || "")
+    .trim()
+    .toUpperCase()
+    .replace(/[\s-]+/g, "_");
+}
+
+// Determine which bookings the authenticated user may access.
+async function resolveBookingScope(req) {
+  const role = normalizeRole(req.user?.role);
+
+  if (role === "CUSTOMER") {
+    const [customers] = await db.execute(
+      "SELECT customer_id FROM customers WHERE user_id = ? LIMIT 1",
+      [req.user.user_id]
+    );
+
+    if (customers.length === 0) {
+      return {
+        error: {
+          status: 403,
+          message: "No customer profile is associated with this account.",
+        },
+      };
+    }
+
+    return {
+      kind: "customer",
+      customerId: customers[0].customer_id,
+    };
+  }
+
+  if (
+    ["SUPER_ADMIN", "SUPER_ADMINISTRATOR"].includes(role)
+  ) {
+    return { kind: "all" };
+  }
+
+  // Staff must have an active assignment to a parking location.
+  if (
+    ["OPERATOR", "PARKING_OPERATOR", "BRANCH_MANAGER"].includes(role)
+  ) {
+    const [operators] = await db.execute(
+      `SELECT location_id
+       FROM operators
+       WHERE user_id = ?
+         AND employment_status = 'ACTIVE'
+       LIMIT 1`,
+      [req.user.user_id]
+    );
+
+    if (operators.length === 0) {
+      return {
+        error: {
+          status: 403,
+          message: "No active parking-location assignment was found.",
+        },
+      };
+    }
+
+    return {
+      kind: "location",
+      locationId: operators[0].location_id,
+    };
+  }
+
+  return {
+    error: {
+      status: 403,
+      message: "Your role cannot access booking operations.",
+    },
+  };
+}
+
+function scopeFilter(scope, locationAlias = "l") {
+  if (scope.kind === "customer") {
+    return {
+      sql: "b.customer_id = ?",
+      params: [scope.customerId],
+    };
+  }
+
+  if (scope.kind === "location") {
+    return {
+      sql: `${locationAlias}.location_id = ?`,
+      params: [scope.locationId],
+    };
+  }
+
+  return {
+    sql: "1 = 1",
+    params: [],
+  };
+}
+
+function sendScopeError(res, scope) {
+  return res.status(scope.error.status).json({
+    success: false,
+    message: scope.error.message,
+  });
+}
+
+function isPositiveInteger(value) {
+  return Number.isSafeInteger(Number(value)) && Number(value) > 0;
+}
+
+function canAccessBooking(scope, booking) {
+  if (scope.kind === "all") {
+    return true;
+  }
+
+  if (scope.kind === "customer") {
+    return Number(booking.customer_id) === Number(scope.customerId);
+  }
+
+  if (scope.kind === "location") {
+    return Number(booking.location_id) === Number(scope.locationId);
+  }
+
+  return false;
+}
+
 async function createBooking(req, res) {
   const {
     customer_id,
@@ -11,18 +141,17 @@ async function createBooking(req, res) {
     expected_entry_time,
     expected_exit_time,
     booking_source = "ONLINE",
-  } = req.body;
+  } = req.body || {};
 
   if (
-    !customer_id ||
-    !vehicle_id ||
-    !slot_id ||
+    !isPositiveInteger(vehicle_id) ||
+    !isPositiveInteger(slot_id) ||
     !expected_entry_time ||
     !expected_exit_time
   ) {
     return res.status(400).json({
       success: false,
-      message: "Customer, vehicle, slot, entry time and exit time are required.",
+      message: "Vehicle, slot, entry time and exit time are required.",
     });
   }
 
@@ -43,19 +172,58 @@ async function createBooking(req, res) {
   let connection;
 
   try {
+    const scope = await resolveBookingScope(req);
+
+    if (scope.error) {
+      return sendScopeError(res, scope);
+    }
+
+    let customerId;
+
+    if (scope.kind === "customer") {
+      // Customer identity always comes from the authenticated account.
+      customerId = scope.customerId;
+
+      if (
+        customer_id !== undefined &&
+        Number(customer_id) !== Number(customerId)
+      ) {
+        return res.status(403).json({
+          success: false,
+          message: "You cannot create bookings for another customer.",
+        });
+      }
+    } else {
+      if (!isPositiveInteger(customer_id)) {
+        return res.status(400).json({
+          success: false,
+          message: "A valid customer ID is required.",
+        });
+      }
+
+      customerId = Number(customer_id);
+    }
+
     connection = await db.getConnection();
     await connection.beginTransaction();
 
-    // Serialize booking attempts for the same slot.
+    // Lock the requested slot and retrieve its location.
     const [slots] = await connection.execute(
-      `SELECT slot_id, is_active
-       FROM parking_slots
-       WHERE slot_id = ?
+      `SELECT
+         s.slot_id,
+         s.is_active,
+         l.location_id
+       FROM parking_slots s
+       JOIN parking_layouts l ON l.layout_id = s.layout_id
+       WHERE s.slot_id = ?
        FOR UPDATE`,
-      [slot_id]
+      [Number(slot_id)]
     );
 
-    if (slots.length === 0 || slots[0].is_active !== 1) {
+    if (
+      slots.length === 0 ||
+      Number(slots[0].is_active) !== 1
+    ) {
       await connection.rollback();
 
       return res.status(409).json({
@@ -64,12 +232,37 @@ async function createBooking(req, res) {
       });
     }
 
-    // Verify that the vehicle belongs to the supplied customer.
+    if (
+      scope.kind === "location" &&
+      Number(slots[0].location_id) !== Number(scope.locationId)
+    ) {
+      await connection.rollback();
+
+      return res.status(403).json({
+        success: false,
+        message: "This parking slot is outside your assigned location.",
+      });
+    }
+
+    const [customers] = await connection.execute(
+      "SELECT customer_id FROM customers WHERE customer_id = ?",
+      [customerId]
+    );
+
+    if (customers.length === 0) {
+      await connection.rollback();
+
+      return res.status(400).json({
+        success: false,
+        message: "Customer does not exist.",
+      });
+    }
+
     const [vehicles] = await connection.execute(
       `SELECT vehicle_id
        FROM vehicles
        WHERE vehicle_id = ? AND customer_id = ?`,
-      [vehicle_id, customer_id]
+      [Number(vehicle_id), customerId]
     );
 
     if (vehicles.length === 0) {
@@ -81,8 +274,6 @@ async function createBooking(req, res) {
       });
     }
 
-    // Overlap exists when existing entry < requested exit
-    // and existing exit > requested entry.
     const placeholders = ACTIVE_BOOKING_STATUSES.map(() => "?").join(", ");
 
     const [conflicts] = await connection.execute(
@@ -94,7 +285,7 @@ async function createBooking(req, res) {
          AND expected_exit_time > ?
        LIMIT 1`,
       [
-        slot_id,
+        Number(slot_id),
         ...ACTIVE_BOOKING_STATUSES,
         expected_exit_time,
         expected_entry_time,
@@ -123,9 +314,9 @@ async function createBooking(req, res) {
         booking_source
       ) VALUES (?, ?, ?, CURRENT_DATE(), NOW(), ?, ?, 'PENDING', ?)`,
       [
-        customer_id,
-        vehicle_id,
-        slot_id,
+        customerId,
+        Number(vehicle_id),
+        Number(slot_id),
         expected_entry_time,
         expected_exit_time,
         booking_source,
@@ -142,7 +333,11 @@ async function createBooking(req, res) {
     });
   } catch (error) {
     if (connection) {
-      await connection.rollback();
+      try {
+        await connection.rollback();
+      } catch (rollbackError) {
+        console.error("Booking rollback failed:", rollbackError.message);
+      }
     }
 
     console.error("Booking creation failed:", error.message);
@@ -158,25 +353,35 @@ async function createBooking(req, res) {
   }
 }
 
-
-
 async function getAllBookings(req, res) {
   try {
-    const [rows] = await db.execute(`
-      SELECT
-        booking_id,
-        customer_id,
-        vehicle_id,
-        slot_id,
-        booking_date,
-        reservation_time,
-        expected_entry_time,
-        expected_exit_time,
-        booking_status,
-        booking_source
-      FROM bookings
-      ORDER BY booking_id DESC
-    `);
+    const scope = await resolveBookingScope(req);
+
+    if (scope.error) {
+      return sendScopeError(res, scope);
+    }
+
+    const filter = scopeFilter(scope);
+
+    const [rows] = await db.execute(
+      `SELECT
+         b.booking_id,
+         b.customer_id,
+         b.vehicle_id,
+         b.slot_id,
+         b.booking_date,
+         b.reservation_time,
+         b.expected_entry_time,
+         b.expected_exit_time,
+         b.booking_status,
+         b.booking_source
+       FROM bookings b
+       JOIN parking_slots s ON s.slot_id = b.slot_id
+       JOIN parking_layouts l ON l.layout_id = s.layout_id
+       WHERE ${filter.sql}
+       ORDER BY b.booking_id DESC`,
+      filter.params
+    );
 
     return res.status(200).json({
       success: true,
@@ -196,7 +401,7 @@ async function getAllBookings(req, res) {
 async function getBookingById(req, res) {
   const bookingId = Number(req.params.id);
 
-  if (!Number.isInteger(bookingId) || bookingId <= 0) {
+  if (!Number.isSafeInteger(bookingId) || bookingId <= 0) {
     return res.status(400).json({
       success: false,
       message: "Invalid booking ID.",
@@ -204,23 +409,36 @@ async function getBookingById(req, res) {
   }
 
   try {
+    const scope = await resolveBookingScope(req);
+
+    if (scope.error) {
+      return sendScopeError(res, scope);
+    }
+
+    const filter = scopeFilter(scope);
+
     const [rows] = await db.execute(
       `SELECT
-         booking_id,
-         customer_id,
-         vehicle_id,
-         slot_id,
-         booking_date,
-         reservation_time,
-         expected_entry_time,
-         expected_exit_time,
-         booking_status,
-         booking_source
-       FROM bookings
-       WHERE booking_id = ?`,
-      [bookingId]
+         b.booking_id,
+         b.customer_id,
+         b.vehicle_id,
+         b.slot_id,
+         b.booking_date,
+         b.reservation_time,
+         b.expected_entry_time,
+         b.expected_exit_time,
+         b.booking_status,
+         b.booking_source
+       FROM bookings b
+       JOIN parking_slots s ON s.slot_id = b.slot_id
+       JOIN parking_layouts l ON l.layout_id = s.layout_id
+       WHERE b.booking_id = ?
+         AND ${filter.sql}
+       LIMIT 1`,
+      [bookingId, ...filter.params]
     );
 
+    // Return 404 for both nonexistent and inaccessible bookings.
     if (rows.length === 0) {
       return res.status(404).json({
         success: false,
@@ -242,20 +460,11 @@ async function getBookingById(req, res) {
   }
 }
 
-
-const ALLOWED_STATUS_TRANSITIONS = {
-  PENDING: ["CONFIRMED", "CANCELLED"],
-  CONFIRMED: ["CANCELLED", "ACTIVE"],
-  ACTIVE: ["COMPLETED"],
-  CANCELLED: [],
-  COMPLETED: [],
-};
-
 async function updateBookingStatus(req, res) {
   const bookingId = Number(req.params.id);
-  const { booking_status } = req.body;
+  const { booking_status } = req.body || {};
 
-  if (!Number.isInteger(bookingId) || bookingId <= 0) {
+  if (!Number.isSafeInteger(bookingId) || bookingId <= 0) {
     return res.status(400).json({
       success: false,
       message: "Invalid booking ID.",
@@ -278,13 +487,25 @@ async function updateBookingStatus(req, res) {
   let connection;
 
   try {
+    const scope = await resolveBookingScope(req);
+
+    if (scope.error) {
+      return sendScopeError(res, scope);
+    }
+
     connection = await db.getConnection();
     await connection.beginTransaction();
 
     const [rows] = await connection.execute(
-      `SELECT booking_id, booking_status
-       FROM bookings
-       WHERE booking_id = ?
+      `SELECT
+         b.booking_id,
+         b.customer_id,
+         b.booking_status,
+         l.location_id
+       FROM bookings b
+       JOIN parking_slots s ON s.slot_id = b.slot_id
+       JOIN parking_layouts l ON l.layout_id = s.layout_id
+       WHERE b.booking_id = ?
        FOR UPDATE`,
       [bookingId]
     );
@@ -298,17 +519,52 @@ async function updateBookingStatus(req, res) {
       });
     }
 
-    const currentStatus = rows[0].booking_status;
-    const allowedNextStatuses =
-      ALLOWED_STATUS_TRANSITIONS[currentStatus] || [];
+    const booking = rows[0];
 
-    if (!allowedNextStatuses.includes(booking_status)) {
+    if (!canAccessBooking(scope, booking)) {
       await connection.rollback();
 
-      return res.status(409).json({
+      return res.status(404).json({
         success: false,
-        message: `Cannot change booking status from ${currentStatus} to ${booking_status}.`,
+        message: "Booking not found.",
       });
+    }
+
+    const role = normalizeRole(req.user.role);
+    const currentStatus = booking.booking_status;
+
+    // Customers may cancel their own pending or confirmed booking,
+    // but cannot confirm, activate, or complete a booking themselves.
+    if (role === "CUSTOMER") {
+      if (booking_status !== "CANCELLED") {
+        await connection.rollback();
+
+        return res.status(403).json({
+          success: false,
+          message: "Customers may only cancel their own bookings.",
+        });
+      }
+
+      if (!["PENDING", "CONFIRMED"].includes(currentStatus)) {
+        await connection.rollback();
+
+        return res.status(409).json({
+          success: false,
+          message: `Cannot cancel a booking with status ${currentStatus}.`,
+        });
+      }
+    } else {
+      const allowedNextStatuses =
+        ALLOWED_STATUS_TRANSITIONS[currentStatus] || [];
+
+      if (!allowedNextStatuses.includes(booking_status)) {
+        await connection.rollback();
+
+        return res.status(409).json({
+          success: false,
+          message: `Cannot change booking status from ${currentStatus} to ${booking_status}.`,
+        });
+      }
     }
 
     await connection.execute(
@@ -332,7 +588,7 @@ async function updateBookingStatus(req, res) {
       try {
         await connection.rollback();
       } catch (rollbackError) {
-        console.error("Rollback failed:", rollbackError.message);
+        console.error("Status update rollback failed:", rollbackError.message);
       }
     }
 
