@@ -658,8 +658,6 @@ function App() {
   }, [user]);
 
   // URL Route Synchronization & Comprehensive Route Mapping
-  const KNOWN_TABS = ["dashboard", "gate", "queue", "valet", "violations", "analytics"];
-
   const ROUTE_ALIASES = {
     dashboard: "dashboard",
     bookings: "dashboard",
@@ -1097,9 +1095,35 @@ function App() {
   }
 
   useEffect(() => {
-    if (token && activeTab !== "dashboard") {
-      loadOperationsData();
+    if (!token || activeTab === "dashboard") return undefined;
+
+    let cancelled = false;
+
+    async function fetchActiveTabData() {
+      try {
+        if (activeTab === "queue") {
+          const res = await api.getQueue(token);
+          if (!cancelled) setQueueData(res.data || []);
+        } else if (activeTab === "valet") {
+          const res = await api.getValetTasks(token);
+          if (!cancelled) setValetData(res.data || []);
+        } else if (activeTab === "violations") {
+          const res = await api.getViolations(token);
+          if (!cancelled) setViolationsData(res.data || []);
+        } else if (activeTab === "analytics") {
+          const res = await api.getAnalytics(token);
+          if (!cancelled) setAnalyticsData(res.data || null);
+        }
+      } catch (err) {
+        if (!cancelled) console.warn("Operations load warning:", err.message);
+      }
     }
+
+    fetchActiveTabData();
+
+    return () => {
+      cancelled = true;
+    };
   }, [activeTab, token, refreshKey]);
 
   async function handleJoinQueue() {
@@ -1214,14 +1238,6 @@ function App() {
               >
                 {token && user ? "← Return to Core Dashboard" : "← Return to Sign In"}
               </button>
-              {token && user && (
-                <button
-                  className="notfound-secondary-button"
-                  onClick={() => navigateToTab("queue")}
-                >
-                  Go to Virtual Queue
-                </button>
-              )}
             </div>
           </section>
 
