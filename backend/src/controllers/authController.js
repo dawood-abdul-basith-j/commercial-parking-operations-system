@@ -114,6 +114,13 @@ async function register(req, res) {
       ]
     );
 
+    await writeAuditLog(connection, {
+      userId: userResult.insertId,
+      moduleName: "AUTH",
+      action: "CUSTOMER_REGISTERED",
+      ipAddress: req.ip,
+    });
+
     await connection.commit();
     transactionStarted = false;
 
@@ -221,6 +228,13 @@ async function login(req, res) {
         message: "Invalid email or password.",
       });
     }
+
+    await writeAuditLog(db, {
+      userId: user.user_id,
+      moduleName: "AUTH",
+      action: "LOGIN_SUCCESS",
+      ipAddress: req.ip,
+    });
 
     const token = jwt.sign(
       { role: user.role_name },
