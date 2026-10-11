@@ -605,7 +605,6 @@ function App() {
     }
   });
 
-  const [mode, setMode] = useState("login");
   const [authForm, setAuthForm] = useState({
     full_name: "",
     email: "",
@@ -658,17 +657,35 @@ function App() {
       path = window.location.hash.replace(/^#\/?/, "").trim();
     }
     const clean = path.toLowerCase();
-    if (!clean || clean === "dashboard") return { tab: "dashboard", raw: "dashboard" };
+
+    // Dedicated Auth Routes
+    if (clean === "login" || clean === "register") {
+      return { tab: "auth", authMode: clean, raw: clean };
+    }
+
+    // Default root / or /dashboard
+    if (!clean || clean === "dashboard") {
+      return { tab: "dashboard", authMode: "login", raw: "dashboard" };
+    }
 
     if (KNOWN_TABS.includes(clean)) {
-      return { tab: clean, raw: clean };
+      return { tab: clean, authMode: "login", raw: clean };
     }
-    return { tab: "404", raw: path };
+
+    return { tab: "404", authMode: "login", raw: path };
   }
 
   const initialRoute = resolveRoute();
   const [activeTab, setActiveTab] = useState(initialRoute.tab);
   const [currentRoutePath, setCurrentRoutePath] = useState(initialRoute.raw);
+  const [mode, setMode] = useState(initialRoute.authMode);
+
+  function handleSetMode(nextMode) {
+    setMode(nextMode);
+    setError("");
+    setNotice("");
+    window.history.pushState({}, "", `/${nextMode}`);
+  }
 
   function navigateToTab(tab) {
     setActiveTab(tab);
@@ -683,15 +700,22 @@ function App() {
       const route = resolveRoute();
       setActiveTab(route.tab);
       setCurrentRoutePath(route.raw);
+      setMode(route.authMode);
     };
 
     window.addEventListener("popstate", handleRouteChange);
     window.addEventListener("hashchange", handleRouteChange);
+
+    // If logged out and on root '/', update URL to match auth mode (/login or /register)
+    if (!token && (window.location.pathname === "/" || window.location.pathname === "")) {
+      window.history.replaceState({}, "", `/${initialRoute.authMode}`);
+    }
+
     return () => {
       window.removeEventListener("popstate", handleRouteChange);
       window.removeEventListener("hashchange", handleRouteChange);
     };
-  }, []);
+  }, [token]);
 
   const [auditLogs, setAuditLogs] = useState([]);
   const [auditPagination, setAuditPagination] = useState(null);
@@ -828,7 +852,7 @@ function App() {
           driving_license_number: authForm.driving_license_number.trim(),
         });
 
-        setMode("login");
+        handleSetMode("login");
         setNotice("Registration successful! Please sign in with your credentials.");
       } else {
         const result = await api.login({
@@ -840,6 +864,7 @@ function App() {
         setUser(result.user);
         setPage(1);
         setNotice("");
+        navigateToTab("dashboard");
       }
     } catch (requestError) {
       setError(requestError.message);
@@ -856,7 +881,7 @@ function App() {
     setPage(1);
     setError("");
     setNotice("");
-    setMode("login");
+    handleSetMode("login");
     setAuthForm({
       full_name: "",
       email: "",
@@ -956,6 +981,7 @@ function App() {
       setUser(result.user);
       setPage(1);
       setNotice("Signed in with Google successfully.");
+      navigateToTab("dashboard");
     } catch (requestError) {
       setError(requestError.message);
     } finally {
@@ -1133,11 +1159,7 @@ function App() {
     return (
       <AuthScreen
         mode={mode}
-        setMode={(nextMode) => {
-          setMode(nextMode);
-          setError("");
-          setNotice("");
-        }}
+        setMode={handleSetMode}
         form={authForm}
         setForm={setAuthForm}
         onSubmit={handleAuthSubmit}
