@@ -1133,36 +1133,45 @@ function App() {
 
   if (activeTab === "404") {
     return (
-      <div className="notfound-page">
-        <header className="notfound-topbar">
-          <div className="brand">
-            <div className="brand-icon-wrap">
-              <IconParking className="brand-icon" />
+      <div className="notfound-overview-page">
+        <header className="topbar">
+          <div className="topbar-container">
+            <div className="brand">
+              <div className="brand-icon-wrap">
+                <IconParking className="brand-icon" />
+              </div>
+              <div className="brand-text">
+                <span className="brand-title">CPOS</span>
+                <span className="brand-tag">Operations Portal</span>
+              </div>
             </div>
-            <div className="brand-text">
-              <span className="brand-title">CPOS</span>
-              <span className="brand-tag">Operations Portal</span>
+            <div className="notfound-badge-chip">
+              <span className="notfound-pulse-dot"></span>
+              <span>Facility Sector: 404 Unresolved</span>
             </div>
-          </div>
-          <div className="notfound-status-chip">
-            <span className="notfound-status-dot"></span>
-            <span>Route Perimeter Offline</span>
           </div>
         </header>
 
-        <div className="notfound-card-wrapper">
-          <div className="notfound-card">
-            <div className="notfound-badge">404 // UNRESOLVED SECTOR</div>
-            <div className="notfound-hero-num">404</div>
-            <h1 className="notfound-headline">Lost in the Facility?</h1>
-            <p className="notfound-explanation">
-              The navigational coordinates for{" "}
-              <span className="notfound-path-pill">/{currentRoutePath}</span>{" "}
-              could not be resolved. This sector does not exist, was relocated, or requires elevated clearance.
+        <main className="notfound-overview-main">
+          <section className="notfound-hero-section">
+            <div className="notfound-pill">
+              <span className="notfound-pulse-dot"></span>
+              <span>HTTP 404 • UNRESOLVED SECTOR</span>
+            </div>
+
+            <div className="notfound-display-number">404</div>
+
+            <h1 className="notfound-headline-text">Facility Sector Not Found</h1>
+
+            <p className="notfound-description-text">
+              The operational coordinates for{" "}
+              <code className="notfound-route-chip">/{currentRoutePath}</code>{" "}
+              could not be located in the CPOS facility directory. This sector does not exist, was relocated, or is restricted.
             </p>
-            <div className="notfound-actions">
+
+            <div className="notfound-actions-group">
               <button
-                className="notfound-primary-btn"
+                className="notfound-primary-button"
                 onClick={() => {
                   if (token && user) {
                     navigateToTab("dashboard");
@@ -1174,14 +1183,108 @@ function App() {
               >
                 {token && user ? "← Return to Core Dashboard" : "← Return to Sign In"}
               </button>
+              {token && user && (
+                <button
+                  className="notfound-secondary-button"
+                  onClick={() => navigateToTab("queue")}
+                >
+                  Go to Virtual Queue
+                </button>
+              )}
+            </div>
+          </section>
+
+          <section className="notfound-directory-wrapper">
+            <div className="notfound-directory-meta">
+              <h2 className="notfound-directory-heading">Facility Sector Directory</h2>
+              <p className="notfound-directory-subheading">Quick navigational access to primary operations modules:</p>
+            </div>
+
+            <div className="notfound-cards-grid">
+              <div
+                className="notfound-overview-card"
+                onClick={() => {
+                  if (token && user) navigateToTab("dashboard");
+                  else { handleSetMode("login"); setActiveTab("auth"); }
+                }}
+              >
+                <div className="notfound-card-icon-box">
+                  <IconCar className="icon" />
+                </div>
+                <div className="notfound-card-info">
+                  <h3>Live Parking Map & Slots</h3>
+                  <p>Real-time slot vacancy, sensor states, and multi-floor facility layouts.</p>
+                  <span className="notfound-card-action">Open Facility Map →</span>
+                </div>
+              </div>
+
+              <div
+                className="notfound-overview-card"
+                onClick={() => {
+                  if (token && user) navigateToTab("queue");
+                  else { handleSetMode("login"); setActiveTab("auth"); }
+                }}
+              >
+                <div className="notfound-card-icon-box">
+                  <IconParking className="icon" />
+                </div>
+                <div className="notfound-card-info">
+                  <h3>Virtual Queue System</h3>
+                  <p>Smart waitlist tracking, queue position updates, and automated entry calls.</p>
+                  <span className="notfound-card-action">Access Virtual Queue →</span>
+                </div>
+              </div>
+
+              <div
+                className="notfound-overview-card"
+                onClick={() => {
+                  if (token && user) navigateToTab("dashboard");
+                  else { handleSetMode("login"); setActiveTab("auth"); }
+                }}
+              >
+                <div className="notfound-card-icon-box">
+                  <IconCalendar className="icon" />
+                </div>
+                <div className="notfound-card-info">
+                  <h3>Bookings & QR Gate Passes</h3>
+                  <p>Manage customer reservations, entry scanner QR tokens, and checkout billing.</p>
+                  <span className="notfound-card-action">View Reservations →</span>
+                </div>
+              </div>
+
+              <div
+                className="notfound-overview-card"
+                onClick={() => {
+                  if (token && user) navigateToTab("violations");
+                  else { handleSetMode("login"); setActiveTab("auth"); }
+                }}
+              >
+                <div className="notfound-card-icon-box">
+                  <IconShield className="icon" />
+                </div>
+                <div className="notfound-card-info">
+                  <h3>Compliance & Enforcement</h3>
+                  <p>Parking violation logs, dispute resolution review, and audit trail records.</p>
+                  <span className="notfound-card-action">Review Compliance →</span>
+                </div>
+              </div>
+            </div>
+          </section>
+        </main>
+
+        <footer className="dashboard-footer" style={{ padding: "20px 24px", maxWidth: "1440px", margin: "0 auto", width: "100%" }}>
+          <div className="footer-content">
+            <div>
+              <span>CPOS — Commercial Parking Operations System</span>
+              <span className="footer-dot"> • </span>
+              <span>HTTP Status 404 Route Unresolved</span>
+            </div>
+            <div className="footer-right">
+              <span>Enterprise Operations v1.0</span>
+              <span className="footer-dot"> • </span>
+              <span>All Systems Operational</span>
             </div>
           </div>
-        </div>
-
-        <footer className="notfound-footer">
-          <span>HTTP STATUS: 404 NOT_FOUND</span>
-          <span>FACILITY TELEMETRY: OUT_OF_BOUNDS</span>
-          <span>CPOS ENTERPRISE v1.0.0</span>
         </footer>
       </div>
     );
