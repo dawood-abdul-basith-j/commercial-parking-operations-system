@@ -2408,90 +2408,164 @@ select:focus {
   transform: translateY(-1px);
 }
 
-.notfound-directory-wrapper {
+.notfound-report-section {
   width: 100%;
-  max-width: 1100px;
-  margin-top: 10px;
+  max-width: 840px;
+  margin: 12px auto 0;
   text-align: left;
 }
 
-.notfound-directory-meta {
-  text-align: center;
-  margin-bottom: 24px;
-}
-
-.notfound-directory-heading {
-  font-size: 1.2rem;
-  font-weight: 800;
-  color: var(--text-primary);
-  margin-bottom: 4px;
-}
-
-.notfound-directory-subheading {
-  font-size: 0.86rem;
-  color: var(--text-muted);
-}
-
-.notfound-cards-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-  gap: 18px;
-  width: 100%;
-}
-
-.notfound-overview-card {
+.notfound-report-card {
   background: #ffffff;
   border: 1.5px solid var(--border-default);
-  border-radius: 16px;
-  padding: 22px 20px;
+  border-radius: 20px;
+  padding: 32px 32px;
+  box-shadow: var(--shadow-sm);
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  cursor: pointer;
-  transition: all var(--transition-normal);
-  box-shadow: var(--shadow-xs);
-}
-
-.notfound-overview-card:hover {
-  border-color: var(--primary-500);
-  transform: translateY(-3px);
-  box-shadow: 0 10px 25px -5px rgba(37, 99, 235, 0.12), 0 4px 10px -2px rgba(37, 99, 235, 0.06);
-}
-
-.notfound-card-icon-box {
-  width: 44px;
-  height: 44px;
-  border-radius: 12px;
-  background: var(--primary-50);
-  color: var(--primary-600);
-  display: flex;
   align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  box-shadow: 0 2px 6px rgba(37, 99, 235, 0.1);
+  text-align: center;
+  transition: all var(--transition-normal);
 }
 
-.notfound-card-info h3 {
-  font-size: 0.98rem;
+.notfound-report-card:hover {
+  border-color: var(--primary-500);
+  box-shadow: 0 10px 25px -5px rgba(37, 99, 235, 0.08);
+}
+
+.notfound-report-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 14px;
+  background: var(--primary-50);
+  border: 1px solid var(--primary-100);
+  border-radius: 9999px;
+  font-size: 0.74rem;
   font-weight: 800;
-  color: var(--text-primary);
-  margin-bottom: 6px;
-}
-
-.notfound-card-info p {
-  font-size: 0.82rem;
-  color: var(--text-secondary);
-  line-height: 1.45;
+  letter-spacing: 0.06em;
+  color: var(--primary-700);
   margin-bottom: 12px;
 }
 
-.notfound-card-action {
-  font-size: 0.82rem;
+.notfound-report-badge .icon {
+  width: 14px;
+  height: 14px;
+}
+
+.notfound-report-title {
+  font-size: clamp(1.15rem, 2.5vw, 1.35rem);
+  font-weight: 800;
+  color: var(--text-primary);
+  margin-bottom: 8px;
+  letter-spacing: -0.02em;
+}
+
+.notfound-report-desc {
+  font-size: 0.92rem;
+  color: var(--text-secondary);
+  line-height: 1.55;
+  max-width: 620px;
+  margin-bottom: 24px;
+}
+
+.notfound-email-display-box {
+  width: 100%;
+  background: var(--bg-surface-subtle);
+  border: 1px solid var(--border-default);
+  border-radius: 14px;
+  padding: 16px 20px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin-bottom: 20px;
+  text-align: left;
+}
+
+.notfound-email-left {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.notfound-email-label {
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.notfound-email-address {
+  font-family: var(--font-mono);
+  font-size: 0.95rem;
   font-weight: 700;
+  color: var(--primary-700);
+  text-decoration: none;
+  word-break: break-all;
+}
+
+.notfound-email-address:hover {
   color: var(--primary-600);
+  text-decoration: underline;
+}
+
+.notfound-email-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.notfound-email-btn {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: 8px;
+  text-decoration: none;
+  padding: 11px 20px;
+  font-size: 0.88rem;
+}
+
+.notfound-email-btn .icon {
+  width: 16px;
+  height: 16px;
+}
+
+.notfound-telemetry-strip {
+  width: 100%;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+  padding-top: 18px;
+  border-top: 1px dashed var(--border-default);
+}
+
+.notfound-telemetry-item {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  text-align: left;
+  background: #ffffff;
+  padding: 10px 14px;
+  border-radius: 10px;
+  border: 1px solid var(--border-subtle);
+}
+
+.notfound-telemetry-label {
+  font-size: 0.66rem;
+  font-weight: 800;
+  color: var(--text-muted);
+  letter-spacing: 0.05em;
+}
+
+.notfound-telemetry-value {
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  word-break: break-all;
 }
 
 

@@ -214,6 +214,15 @@ function IconEyeOff({ className = "icon" }) {
   );
 }
 
+function IconMail({ className = "icon" }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z" />
+      <polyline points="22,6 12,13 2,6" />
+    </svg>
+  );
+}
+
 function getDefaultBookingForm() {
   const tomorrow = new Date();
   tomorrow.setDate(tomorrow.getDate() + 1);
@@ -648,8 +657,28 @@ function App() {
     }
   }, [user]);
 
-  // URL Route Synchronization & 404 Route Detection
+  // URL Route Synchronization & Comprehensive Route Mapping
   const KNOWN_TABS = ["dashboard", "gate", "queue", "valet", "violations", "analytics"];
+
+  const ROUTE_ALIASES = {
+    dashboard: "dashboard",
+    bookings: "dashboard",
+    reservations: "dashboard",
+    parking: "dashboard",
+    map: "dashboard",
+    audit: "dashboard",
+    logs: "dashboard",
+    gate: "gate",
+    scanner: "gate",
+    queue: "queue",
+    "virtual-queue": "queue",
+    valet: "valet",
+    violations: "violations",
+    compliance: "violations",
+    disputes: "violations",
+    analytics: "analytics",
+    reports: "analytics",
+  };
 
   function resolveRoute() {
     let path = window.location.pathname.replace(/^\//, "").trim();
@@ -668,8 +697,8 @@ function App() {
       return { tab: "dashboard", authMode: "login", raw: "dashboard" };
     }
 
-    if (KNOWN_TABS.includes(clean)) {
-      return { tab: clean, authMode: "login", raw: clean };
+    if (ROUTE_ALIASES[clean]) {
+      return { tab: ROUTE_ALIASES[clean], authMode: "login", raw: clean };
     }
 
     return { tab: "404", authMode: "login", raw: path };
@@ -679,6 +708,7 @@ function App() {
   const [activeTab, setActiveTab] = useState(initialRoute.tab);
   const [currentRoutePath, setCurrentRoutePath] = useState(initialRoute.raw);
   const [mode, setMode] = useState(initialRoute.authMode);
+  const [emailCopied, setEmailCopied] = useState(false);
 
   function handleSetMode(nextMode) {
     setMode(nextMode);
@@ -864,7 +894,8 @@ function App() {
         setUser(result.user);
         setPage(1);
         setNotice("");
-        navigateToTab("dashboard");
+        const destination = (currentRoutePath && ROUTE_ALIASES[currentRoutePath]) ? ROUTE_ALIASES[currentRoutePath] : "dashboard";
+        navigateToTab(destination);
       }
     } catch (requestError) {
       setError(requestError.message);
@@ -1194,78 +1225,63 @@ function App() {
             </div>
           </section>
 
-          <section className="notfound-directory-wrapper">
-            <div className="notfound-directory-meta">
-              <h2 className="notfound-directory-heading">Facility Sector Directory</h2>
-              <p className="notfound-directory-subheading">Quick navigational access to primary operations modules:</p>
-            </div>
+          <section className="notfound-report-section">
+            <div className="notfound-report-card">
+              <div className="notfound-report-badge">
+                <IconMail className="icon" />
+                <span>OPERATIONS SUPPORT & INCIDENT REPORT</span>
+              </div>
 
-            <div className="notfound-cards-grid">
-              <div
-                className="notfound-overview-card"
-                onClick={() => {
-                  if (token && user) navigateToTab("dashboard");
-                  else { handleSetMode("login"); setActiveTab("auth"); }
-                }}
-              >
-                <div className="notfound-card-icon-box">
-                  <IconCar className="icon" />
+              <h2 className="notfound-report-title">Report Unresolved Sector or Broken Route</h2>
+
+              <p className="notfound-report-desc">
+                If you encountered a broken link, missing page, or sector that should be accessible, report this incident directly to our operations administrator:
+              </p>
+
+              <div className="notfound-email-display-box">
+                <div className="notfound-email-left">
+                  <span className="notfound-email-label">DIRECT SUPPORT CONTACT</span>
+                  <a
+                    href={`mailto:dawoodabdulbasith24bcs054@gmail.com?subject=${encodeURIComponent(`CPOS Incident: 404 Route Unresolved (/${currentRoutePath})`)}&body=${encodeURIComponent(`Hello Operations Administrator,\n\nI encountered an unresolved 404 error in the CPOS application:\n\n- Unresolved Route: /${currentRoutePath}\n- Full URL: ${window.location.href}\n- Incident Code: ERR_404_SECTOR_UNRESOLVED\n- Client Timestamp: ${new Date().toLocaleString()}\n\nPlease investigate this route or restore access.\n\nThank you.`)}`}
+                    className="notfound-email-address"
+                  >
+                    dawoodabdulbasith24bcs054@gmail.com
+                  </a>
                 </div>
-                <div className="notfound-card-info">
-                  <h3>Live Parking Map & Slots</h3>
-                  <p>Real-time slot vacancy, sensor states, and multi-floor facility layouts.</p>
-                  <span className="notfound-card-action">Open Facility Map →</span>
+                <div className="notfound-email-actions">
+                  <a
+                    href={`mailto:dawoodabdulbasith24bcs054@gmail.com?subject=${encodeURIComponent(`CPOS Incident: 404 Route Unresolved (/${currentRoutePath})`)}&body=${encodeURIComponent(`Hello Operations Administrator,\n\nI encountered an unresolved 404 error in the CPOS application:\n\n- Unresolved Route: /${currentRoutePath}\n- Full URL: ${window.location.href}\n- Incident Code: ERR_404_SECTOR_UNRESOLVED\n- Client Timestamp: ${new Date().toLocaleString()}\n\nPlease investigate this route or restore access.\n\nThank you.`)}`}
+                    className="notfound-primary-button notfound-email-btn"
+                  >
+                    <IconMail className="icon" />
+                    <span>Report via Email</span>
+                  </a>
+                  <button
+                    type="button"
+                    className="notfound-secondary-button"
+                    onClick={() => {
+                      navigator.clipboard.writeText("dawoodabdulbasith24bcs054@gmail.com");
+                      setEmailCopied(true);
+                      setTimeout(() => setEmailCopied(false), 2500);
+                    }}
+                  >
+                    {emailCopied ? "✓ Email Copied!" : "Copy Email"}
+                  </button>
                 </div>
               </div>
 
-              <div
-                className="notfound-overview-card"
-                onClick={() => {
-                  if (token && user) navigateToTab("queue");
-                  else { handleSetMode("login"); setActiveTab("auth"); }
-                }}
-              >
-                <div className="notfound-card-icon-box">
-                  <IconParking className="icon" />
+              <div className="notfound-telemetry-strip">
+                <div className="notfound-telemetry-item">
+                  <span className="notfound-telemetry-label">INCIDENT CODE</span>
+                  <span className="notfound-telemetry-value">ERR_404_SECTOR_UNRESOLVED</span>
                 </div>
-                <div className="notfound-card-info">
-                  <h3>Virtual Queue System</h3>
-                  <p>Smart waitlist tracking, queue position updates, and automated entry calls.</p>
-                  <span className="notfound-card-action">Access Virtual Queue →</span>
+                <div className="notfound-telemetry-item">
+                  <span className="notfound-telemetry-label">REQUESTED PATH</span>
+                  <span className="notfound-telemetry-value">/{currentRoutePath}</span>
                 </div>
-              </div>
-
-              <div
-                className="notfound-overview-card"
-                onClick={() => {
-                  if (token && user) navigateToTab("dashboard");
-                  else { handleSetMode("login"); setActiveTab("auth"); }
-                }}
-              >
-                <div className="notfound-card-icon-box">
-                  <IconCalendar className="icon" />
-                </div>
-                <div className="notfound-card-info">
-                  <h3>Bookings & QR Gate Passes</h3>
-                  <p>Manage customer reservations, entry scanner QR tokens, and checkout billing.</p>
-                  <span className="notfound-card-action">View Reservations →</span>
-                </div>
-              </div>
-
-              <div
-                className="notfound-overview-card"
-                onClick={() => {
-                  if (token && user) navigateToTab("violations");
-                  else { handleSetMode("login"); setActiveTab("auth"); }
-                }}
-              >
-                <div className="notfound-card-icon-box">
-                  <IconShield className="icon" />
-                </div>
-                <div className="notfound-card-info">
-                  <h3>Compliance & Enforcement</h3>
-                  <p>Parking violation logs, dispute resolution review, and audit trail records.</p>
-                  <span className="notfound-card-action">Review Compliance →</span>
+                <div className="notfound-telemetry-item">
+                  <span className="notfound-telemetry-label">SUPPORT INBOX</span>
+                  <span className="notfound-telemetry-value">dawoodabdulbasith24bcs054@gmail.com</span>
                 </div>
               </div>
             </div>
