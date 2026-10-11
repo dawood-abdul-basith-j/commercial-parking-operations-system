@@ -1,5 +1,6 @@
 
 const db = require("../config/db");
+const { writeAuditLog } = require("../utils/auditLogger");
 
 const ACTIVE_BOOKING_STATUSES = ["PENDING", "CONFIRMED", "ACTIVE"];
 
@@ -17,6 +18,67 @@ function normalizeRole(role) {
     .toUpperCase()
     .replace(/[\s-]+/g, "_");
 }
+
+
+function parseSqlDateTime(value) {
+  // Preserve the existing API format: YYYY-MM-DD HH:mm:ss.
+  // These are timezone-less database wall-clock values.
+  if (typeof value !== "string") return null;
+
+  const match = /^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2})$/.exec(value);
+  if (!match) return null;
+
+  const [, year, month, day, hour, minute, second] = match;
+  const parts = [year, month, day, hour, minute, second].map(Number);
+
+  const [y, mo, d, h, mi, s] = parts;
+
+  if (
+    mo < 1 || mo > 12 ||
+    d < 1 || h > 23 || mi > 59 || s > 59
+  ) {
+    return null;
+  }
+
+  const date = new Date(Date.UTC(y, mo - 1, d, h, mi, s));
+
+  // Reject impossible calendar dates such as February 30.
+  if (
+    date.getUTCFullYear() !== y ||
+    date.getUTCMonth() !== mo - 1 ||
+    date.getUTCDate() !== d ||
+    date.getUTCHours() !== h ||
+    date.getUTCMinutes() !== mi ||
+    date.getUTCSeconds() !== s
+  ) {
+    return null;
+  }
+
+  return {
+    sql: value,
+    comparisonValue: date.getTime(),
+  };
+}
+
+function parsePaginationInteger(value, fallback, maximum) {
+  if (value === undefined) return fallback;
+
+  if (
+    typeof value !== "string" ||
+    !/^[1-9]\d*$/.test(value)
+  ) {
+    return null;
+  }
+
+  const number = Number(value);
+
+  if (!Number.isSafeInteger(number) || number > maximum) {
+    return null;
+  }
+
+  return number;
+}
+
 
 // Determine which bookings the authenticated user may access.
 async function resolveBookingScope(req) {
@@ -155,19 +217,34 @@ async function createBooking(req, res) {
     });
   }
 
-  const entryTime = new Date(expected_entry_time);
-  const exitTime = new Date(expected_exit_time);
 
-  if (
-    Number.isNaN(entryTime.getTime()) ||
-    Number.isNaN(exitTime.getTime()) ||
-    exitTime <= entryTime
-  ) {
+  const entry = parseSqlDateTime(expected_entry_time);
+  const exit = parseSqlDateTime(expected_exit_time);
+
+  if (!entry || !exit) {
+    return res.status(400).json({
+      success: false,
+      message: "Entry and exit times must use YYYY-MM-DD HH:mm:ss and be valid dates.",
+    });
+  }
+
+  if (exit.comparisonValue <= entry.comparisonValue) {
     return res.status(400).json({
       success: false,
       message: "Exit time must be later than entry time.",
     });
   }
+
+  if (
+    typeof booking_source !== "string" ||
+    !["ONLINE", "WALK_IN"].includes(booking_source.trim().toUpperCase())
+  ) {
+    return res.status(400).json({
+      success: false,
+      message: "Booking source must be ONLINE or WALK_IN.",
+    });
+  }
+
 
   let connection;
 
@@ -323,6 +400,13 @@ async function createBooking(req, res) {
       ]
     );
 
+    await writeAuditLog(connection, {
+      userId: req.user.user_id,
+      moduleName: "BOOKINGS",
+      action: `CREATED booking_id=${result.insertId} status=PENDING`,
+      ipAddress: req.ip,
+    });
+
     await connection.commit();
 
     return res.status(201).json({
@@ -353,7 +437,27 @@ async function createBooking(req, res) {
   }
 }
 
+
 async function getAllBookings(req, res) {
+  const page = parsePaginationInteger(req.query.page, 1, 1000000);
+  const limit = parsePaginationInteger(req.query.limit, 20, 100);
+
+  if (page === null || limit === null) {
+    return res.status(400).json({
+      success: false,
+      message: "Page must be a positive integer and limit must be between 1 and 100.",
+    });
+  }
+
+  const offset = (page - 1) * limit;
+
+  if (!Number.isSafeInteger(offset)) {
+    return res.status(400).json({
+      success: false,
+      message: "Requested page is too large.",
+    });
+  }
+
   try {
     const scope = await resolveBookingScope(req);
 
@@ -362,6 +466,17 @@ async function getAllBookings(req, res) {
     }
 
     const filter = scopeFilter(scope);
+
+    const [countRows] = await db.execute(
+      `SELECT COUNT(*) AS total
+       FROM bookings b
+       JOIN parking_slots s ON s.slot_id = b.slot_id
+       JOIN parking_layouts l ON l.layout_id = s.layout_id
+       WHERE ${filter.sql}`,
+      filter.params
+    );
+
+    const total = Number(countRows[0].total);
 
     const [rows] = await db.execute(
       `SELECT
@@ -379,12 +494,19 @@ async function getAllBookings(req, res) {
        JOIN parking_slots s ON s.slot_id = b.slot_id
        JOIN parking_layouts l ON l.layout_id = s.layout_id
        WHERE ${filter.sql}
-       ORDER BY b.booking_id DESC`,
-      filter.params
+       ORDER BY b.booking_id DESC
+       LIMIT ? OFFSET ?`,
+      [...filter.params, limit, offset]
     );
 
     return res.status(200).json({
       success: true,
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages: Math.ceil(total / limit),
+      },
       count: rows.length,
       data: rows,
     });
@@ -573,6 +695,13 @@ async function updateBookingStatus(req, res) {
        WHERE booking_id = ?`,
       [booking_status, bookingId]
     );
+
+    await writeAuditLog(connection, {
+      userId: req.user.user_id,
+      moduleName: "BOOKINGS",
+      action: `STATUS_CHANGED booking_id=${bookingId} from=${currentStatus} to=${booking_status}`,
+      ipAddress: req.ip,
+    });
 
     await connection.commit();
 

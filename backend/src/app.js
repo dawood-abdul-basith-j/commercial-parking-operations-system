@@ -46,4 +46,21 @@ app.get("/api/health/db", async (req, res) => {
 });
 
 
+app.use((err, req, res, next) => {
+  if (err && err.type === "entity.parse.failed") {
+    return res.status(400).json({
+      success: false,
+      message: "Invalid JSON request body.",
+    });
+  }
+
+  console.error("Unhandled request error:", err.message);
+
+  return res.status(500).json({
+    success: false,
+    message: "Internal server error.",
+  });
+});
+
+
 module.exports = app;
