@@ -28,6 +28,16 @@ router.get("/qr/:bookingId", async (req, res) => {
 
     let record = rows[0];
 
+    // Role access control: Customers can ONLY access their own booking QR
+    if (req.user.role === "CUSTOMER") {
+      const [customers] = await db.execute("SELECT customer_id FROM customers WHERE user_id = ?", [req.user.user_id]);
+      const customerId = customers[0]?.customer_id;
+      const [bookingOwner] = await db.execute("SELECT customer_id FROM bookings WHERE booking_id = ?", [bookingId]);
+      if (bookingOwner.length === 0 || bookingOwner[0].customer_id !== customerId) {
+        return res.status(403).json({ success: false, message: "Forbidden: You cannot access QR passes for other customers." });
+      }
+    }
+
     // If QR record doesn't exist yet, auto-generate one
     if (!record.qr_code) {
       const generatedOtp = String(Math.floor(100000 + Math.random() * 900000));
@@ -243,7 +253,17 @@ router.post("/payments/process", async (req, res) => {
 
 // FR-3.4.2 & FR-3.4.3: Get Invoices & Payment History for Booking or User
 router.get("/invoices/booking/:bookingId", async (req, res) => {
+  const bookingId = Number(req.params.bookingId);
   try {
+    if (req.user.role === "CUSTOMER") {
+      const [customers] = await db.execute("SELECT customer_id FROM customers WHERE user_id = ?", [req.user.user_id]);
+      const customerId = customers[0]?.customer_id;
+      const [bookingOwner] = await db.execute("SELECT customer_id FROM bookings WHERE booking_id = ?", [bookingId]);
+      if (bookingOwner.length === 0 || bookingOwner[0].customer_id !== customerId) {
+        return res.status(403).json({ success: false, message: "Forbidden: You cannot view invoices for other customers." });
+      }
+    }
+
     const [rows] = await db.execute(
       `SELECT i.*, p.payment_method, p.transaction_reference, p.payment_status
        FROM invoices i
@@ -376,13 +396,22 @@ router.post("/queue/join", async (req, res) => {
 
 router.get("/valet", async (req, res) => {
   try {
-    const [rows] = await db.execute(
-      `SELECT v.*, b.slot_id, veh.vehicle_number, veh.model
+    let query = `SELECT v.*, b.slot_id, veh.vehicle_number, veh.model
        FROM valet_tasks v
        JOIN bookings b ON b.booking_id = v.booking_id
-       JOIN vehicles veh ON veh.vehicle_id = v.vehicle_id
-       ORDER BY v.valet_id DESC`
-    );
+       JOIN vehicles veh ON veh.vehicle_id = v.vehicle_id`;
+    const params = [];
+
+    // Role access control: Customers can ONLY see their own vehicles
+    if (req.user.role === "CUSTOMER") {
+      const [customers] = await db.execute("SELECT customer_id FROM customers WHERE user_id = ?", [req.user.user_id]);
+      const customerId = customers[0]?.customer_id || 0;
+      query += ` WHERE b.customer_id = ?`;
+      params.push(customerId);
+    }
+
+    query += ` ORDER BY v.valet_id DESC`;
+    const [rows] = await db.execute(query, params);
     return res.status(200).json({ success: true, data: rows });
   } catch (err) {
     return res.status(500).json({ success: false, message: "Failed to fetch valet tasks." });
@@ -391,7 +420,25 @@ router.get("/valet", async (req, res) => {
 
 router.post("/valet/request-retrieval", async (req, res) => {
   const { valet_id } = req.body;
+  if (!valet_id) {
+    return res.status(400).json({ success: false, message: "Valet task ID is required." });
+  }
   try {
+    if (req.user.role === "CUSTOMER") {
+      const [customers] = await db.execute("SELECT customer_id FROM customers WHERE user_id = ?", [req.user.user_id]);
+      const customerId = customers[0]?.customer_id || 0;
+      const [taskRows] = await db.execute(
+        `SELECT v.valet_id 
+         FROM valet_tasks v
+         JOIN bookings b ON b.booking_id = v.booking_id
+         WHERE v.valet_id = ? AND b.customer_id = ?`,
+        [Number(valet_id), customerId]
+      );
+      if (taskRows.length === 0) {
+        return res.status(403).json({ success: false, message: "Forbidden: You cannot request retrieval for another customer's vehicle." });
+      }
+    }
+
     await db.execute(
       `UPDATE valet_tasks 
        SET retrieval_requested = TRUE, requested_at = NOW(), valet_status = 'RETRIEVAL_REQUESTED'
@@ -410,7 +457,21 @@ router.post("/valet/request-retrieval", async (req, res) => {
 
 router.get("/violations", async (req, res) => {
   try {
-    const [rows] = await db.execute(`SELECT * FROM violations ORDER BY violation_id DESC`);
+    let query = `SELECT viol.* FROM violations viol`;
+    const params = [];
+
+    // Role access control: Customers can ONLY view violations for their own vehicles or bookings
+    if (req.user.role === "CUSTOMER") {
+      const [customers] = await db.execute("SELECT customer_id FROM customers WHERE user_id = ?", [req.user.user_id]);
+      const customerId = customers[0]?.customer_id || 0;
+      query += ` LEFT JOIN vehicles veh ON veh.vehicle_number = viol.vehicle_number
+                 LEFT JOIN bookings b ON b.booking_id = viol.booking_id
+                 WHERE veh.customer_id = ? OR b.customer_id = ?`;
+      params.push(customerId, customerId);
+    }
+
+    query += ` ORDER BY viol.violation_id DESC`;
+    const [rows] = await db.execute(query, params);
     return res.status(200).json({ success: true, data: rows });
   } catch (err) {
     return res.status(500).json({ success: false, message: "Failed to fetch violations." });
@@ -433,7 +494,26 @@ router.post("/violations/issue", requireRole(["PARKING_OPERATOR", "BRANCH_MANAGE
 
 router.post("/violations/dispute", async (req, res) => {
   const { violation_id, dispute_reason } = req.body;
+  if (!violation_id || !dispute_reason) {
+    return res.status(400).json({ success: false, message: "Violation ID and dispute reason are required." });
+  }
   try {
+    if (req.user.role === "CUSTOMER") {
+      const [customers] = await db.execute("SELECT customer_id FROM customers WHERE user_id = ?", [req.user.user_id]);
+      const customerId = customers[0]?.customer_id || 0;
+      const [violRows] = await db.execute(
+        `SELECT viol.violation_id 
+         FROM violations viol
+         LEFT JOIN vehicles veh ON veh.vehicle_number = viol.vehicle_number
+         LEFT JOIN bookings b ON b.booking_id = viol.booking_id
+         WHERE viol.violation_id = ? AND (veh.customer_id = ? OR b.customer_id = ?)`,
+        [Number(violation_id), customerId, customerId]
+      );
+      if (violRows.length === 0) {
+        return res.status(403).json({ success: false, message: "Forbidden: You cannot dispute another customer's violation notice." });
+      }
+    }
+
     await db.execute(
       `UPDATE violations SET penalty_status = 'DISPUTED', dispute_reason = ? WHERE violation_id = ?`,
       [dispute_reason, Number(violation_id)]
