@@ -2,6 +2,7 @@
 const db = require("../config/db");
 const bcrypt = require("bcrypt");
 const jwt = require("jsonwebtoken");
+const { writeAuditLog } = require("../utils/auditLogger");
 
 function getJwtSecret() {
   if (!process.env.JWT_SECRET) {
@@ -15,6 +16,7 @@ function isNonEmptyString(value) {
   return typeof value === "string" && value.trim().length > 0;
 }
 
+// Register a new customer and audit the registration in the same transaction.
 async function register(req, res) {
   const body = req.body || {};
 
@@ -67,6 +69,7 @@ async function register(req, res) {
     await connection.beginTransaction();
     transactionStarted = true;
 
+    // Registration always assigns CUSTOMER; clients cannot choose a role.
     const [roles] = await connection.execute(
       "SELECT role_id FROM roles WHERE role_name = ? LIMIT 1",
       ["CUSTOMER"]
@@ -114,6 +117,7 @@ async function register(req, res) {
       ]
     );
 
+    // Audit within the same transaction as registration.
     await writeAuditLog(connection, {
       userId: userResult.insertId,
       moduleName: "AUTH",
@@ -161,6 +165,7 @@ async function register(req, res) {
   }
 }
 
+// Authenticate a user, audit successful login, and issue a JWT.
 async function login(req, res) {
   const body = req.body || {};
   const { email, password } = body;
@@ -229,6 +234,7 @@ async function login(req, res) {
       });
     }
 
+    // Log only successful authentication; never log passwords or tokens.
     await writeAuditLog(db, {
       userId: user.user_id,
       moduleName: "AUTH",
@@ -258,7 +264,7 @@ async function login(req, res) {
       },
     });
   } catch (error) {
-    console.error("Login failed:", error.message);
+    console.error("Login or login-audit operation failed:", error.message);
 
     return res.status(500).json({
       success: false,
@@ -267,6 +273,7 @@ async function login(req, res) {
   }
 }
 
+// Return the profile already resolved by authentication middleware.
 function getMe(req, res) {
   return res.status(200).json({
     success: true,
