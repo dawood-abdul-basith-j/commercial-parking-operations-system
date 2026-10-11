@@ -315,7 +315,7 @@ router.post("/pricing", requireRole(["BRANCH_MANAGER", "SUPER_ADMINISTRATOR"]), 
 router.get("/queue", async (req, res) => {
   try {
     const [rows] = await db.execute(
-      `SELECT q.*, u.full_name, u.email 
+      `SELECT q.*, u.full_name, u.email, c.user_id
        FROM virtual_queues q 
        JOIN customers c ON c.customer_id = q.customer_id
        JOIN users u ON u.user_id = c.user_id
@@ -387,6 +387,51 @@ router.post("/queue/join", async (req, res) => {
   } catch (err) {
     console.error("Queue join error:", err.message);
     return res.status(500).json({ success: false, message: "Failed to join queue." });
+  }
+});
+
+// Remove / Dequeue member from virtual queue
+router.delete("/queue/:queueId", async (req, res) => {
+  const queueId = Number(req.params.queueId);
+  try {
+    const [queueRows] = await db.execute(
+      `SELECT q.*, c.user_id 
+       FROM virtual_queues q 
+       JOIN customers c ON c.customer_id = q.customer_id 
+       WHERE q.queue_id = ?`,
+      [queueId]
+    );
+
+    if (queueRows.length === 0) {
+      return res.status(404).json({ success: false, message: "Queue entry not found." });
+    }
+
+    const entry = queueRows[0];
+
+    // Role-based authorization:
+    // CUSTOMER: Can only cancel/remove their OWN waiting queue entry!
+    // Staff (PARKING_OPERATOR, BRANCH_MANAGER, SUPER_ADMINISTRATOR): Can remove ANY member!
+    if (req.user.role === "CUSTOMER" && entry.user_id !== req.user.user_id) {
+      return res.status(403).json({
+        success: false,
+        message: "Forbidden: You do not have permission to remove other members from the virtual queue."
+      });
+    }
+
+    await db.execute(
+      "UPDATE virtual_queues SET queue_status = 'REMOVED' WHERE queue_id = ?",
+      [queueId]
+    );
+
+    return res.status(200).json({
+      success: true,
+      message: req.user.role === "CUSTOMER"
+        ? "You have left the virtual waiting queue."
+        : `Queue member #${entry.queue_number} has been removed from the queue.`
+    });
+  } catch (err) {
+    console.error("Queue removal error:", err.message);
+    return res.status(500).json({ success: false, message: "Failed to remove member from queue." });
   }
 });
 

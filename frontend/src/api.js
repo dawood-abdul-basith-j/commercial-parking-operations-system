@@ -133,6 +133,12 @@ export const api = {
       method: "POST",
     }),
 
+  removeQueueMember: (token, queueId) =>
+    request(`/api/operations/queue/${queueId}`, {
+      token,
+      method: "DELETE",
+    }),
+
   // Module 3.7: Valet
   getValetTasks: (token) =>
     request("/api/operations/valet", { token }),

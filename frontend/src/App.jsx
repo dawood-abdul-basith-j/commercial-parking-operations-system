@@ -1036,6 +1036,16 @@ function App() {
     }
   }
 
+  async function handleRemoveQueueMember(queueId) {
+    try {
+      const res = await api.removeQueueMember(token, queueId);
+      setNotice(res.message);
+      loadOperationsData();
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
   async function handleValetRetrieval(valetId) {
     try {
       const res = await api.requestValetRetrieval(token, valetId);
@@ -1960,11 +1970,12 @@ function App() {
                       <th>Driver / User</th>
                       <th>Status</th>
                       <th>Joined Time</th>
+                      <th>Queue Action</th>
                     </tr>
                   </thead>
                   <tbody>
                     {queueData.length === 0 ? (
-                      <tr><td colSpan={4} className="text-center">No drivers currently in waiting queue.</td></tr>
+                      <tr><td colSpan={5} className="text-center">No drivers currently in waiting queue.</td></tr>
                     ) : (
                       queueData.map((q) => (
                         <tr key={q.queue_id}>
@@ -1972,6 +1983,27 @@ function App() {
                           <td><strong>{q.full_name}</strong> ({q.email})</td>
                           <td><span className="status-pill status-active">{q.queue_status}</span></td>
                           <td>{formatDate(q.joined_at)}</td>
+                          <td>
+                            {isStaff ? (
+                              <button
+                                className="small-button btn-cancel"
+                                onClick={() => handleRemoveQueueMember(q.queue_id)}
+                                title="Operator / Manager action: Remove member from waiting queue"
+                              >
+                                ✕ Remove Member
+                              </button>
+                            ) : q.user_id === user?.user_id ? (
+                              <button
+                                className="small-button btn-cancel"
+                                onClick={() => handleRemoveQueueMember(q.queue_id)}
+                                title="Customer action: Leave the virtual waiting queue"
+                              >
+                                ✕ Leave Queue
+                              </button>
+                            ) : (
+                              <span className="text-muted">—</span>
+                            )}
+                          </td>
                         </tr>
                       ))
                     )}
