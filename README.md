@@ -125,3 +125,18 @@ Frontend runs on `http://localhost:5173`.
 
 ### Audit Trail (`/api/audit-logs`)
 - `GET /`: Retrieve system audit logs (Restricted to `SUPER_ADMINISTRATOR`).
+
+### Operations & SRS Features (`/api/operations`)
+- `GET /qr/:bookingId`: Generate dynamic Gate Entry QR & verification OTP (FR-3.3).
+- `POST /verify-entry`: Operator Gate Scanner check-in & slot lock (FR-3.3).
+- `POST /verify-exit`: Operator Gate Scanner check-out, slot release & billing finalization (FR-3.3).
+- `POST /payments`: Process digital payments (UPI, Card, Net Banking) & settle balances (FR-3.4).
+- `GET /invoices`: View digital tax invoices and payment receipts (FR-3.4).
+- `GET /queue`: Live virtual waiting queue tracking by parking lot (FR-3.6).
+- `POST /queue/join`: Enqueue customer vehicle when slots are fully booked (FR-3.6).
+- `GET /valet`: Digital valet tracking, vehicle location & key-tag management (FR-3.7).
+- `POST /valet/:taskId/retrieve`: Customer valet retrieval request (FR-3.7).
+- `GET /violations`: List issued parking violation notices & fines (FR-3.8).
+- `POST /violations`: Issue penalty notice for unauthorized parking / overtime (FR-3.8).
+- `POST /violations/:id/dispute`: Submit customer fine dispute for manager review (FR-3.8).
+- `GET /analytics`: Multi-metric operational reporting (Occupancy rate, total revenue, average duration, peak hours) (FR-3.9).

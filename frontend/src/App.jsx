@@ -675,6 +675,18 @@ function App() {
   const [statusFilter, setStatusFilter] = useState("ALL");
   const [selectedFloor, setSelectedFloor] = useState("L1");
 
+  // Multi-Module Operations State
+  const [activeTab, setActiveTab] = useState("dashboard");
+  const [modalQrData, setModalQrData] = useState(null);
+  const [modalInvoiceData, setModalInvoiceData] = useState(null);
+  const [queueData, setQueueData] = useState([]);
+  const [valetData, setValetData] = useState([]);
+  const [violationsData, setViolationsData] = useState([]);
+  const [analyticsData, setAnalyticsData] = useState(null);
+  const [operatorOtpInput, setOperatorOtpInput] = useState("");
+  const [operatorBookingInput, setOperatorBookingInput] = useState("");
+  const [violationForm, setViolationForm] = useState({ vehicle_number: "", violation_type: "OVERSTAY", fine_amount: 50 });
+
   // Production Parking Layout: 12 defined slots per floor with types & zones
   const PARKING_LOT_SLOTS = [
     { id: 1, number: "A-01", type: "Standard", floor: "L1", isEv: false, isHandicap: false },
@@ -918,6 +930,132 @@ function App() {
     }
   }
 
+  // --- Multi-Module Handlers ---
+  async function openQrModal(bookingId) {
+    try {
+      const res = await api.getQrCode(token, bookingId);
+      setModalQrData(res.data);
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
+  async function openInvoiceModal(bookingId) {
+    try {
+      const res = await api.getInvoices(token, bookingId);
+      if (res.data && res.data.length > 0) {
+        setModalInvoiceData(res.data[0]);
+      } else {
+        // Auto-generate invoice if none exists
+        const payRes = await api.processPayment(token, {
+          booking_id: bookingId,
+          payment_method: "CARD",
+          amount: 25.00
+        });
+        const invRes = await api.getInvoices(token, bookingId);
+        setModalInvoiceData(invRes.data[0] || { invoice_number: payRes.data.invoice_number, total_amount: payRes.data.total_amount });
+      }
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
+  async function handleOperatorEntry(e) {
+    e.preventDefault();
+    try {
+      const res = await api.verifyEntry(token, {
+        otp: operatorOtpInput.trim() || undefined,
+        booking_id: operatorBookingInput ? Number(operatorBookingInput) : undefined
+      });
+      setNotice(res.message);
+      setOperatorOtpInput("");
+      setOperatorBookingInput("");
+      setRefreshKey((v) => v + 1);
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
+  async function handleOperatorExit(bookingId) {
+    try {
+      const res = await api.verifyExit(token, { booking_id: bookingId });
+      setNotice(res.message);
+      setRefreshKey((v) => v + 1);
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
+  async function loadOperationsData() {
+    try {
+      if (activeTab === "queue") {
+        const res = await api.getQueue(token);
+        setQueueData(res.data || []);
+      } else if (activeTab === "valet") {
+        const res = await api.getValetTasks(token);
+        setValetData(res.data || []);
+      } else if (activeTab === "violations") {
+        const res = await api.getViolations(token);
+        setViolationsData(res.data || []);
+      } else if (activeTab === "analytics") {
+        const res = await api.getAnalytics(token);
+        setAnalyticsData(res.data || null);
+      }
+    } catch (err) {
+      console.warn("Operations load warning:", err.message);
+    }
+  }
+
+  useEffect(() => {
+    if (token && activeTab !== "dashboard") {
+      loadOperationsData();
+    }
+  }, [activeTab, token, refreshKey]);
+
+  async function handleJoinQueue() {
+    try {
+      const res = await api.joinQueue(token);
+      setNotice(res.message);
+      loadOperationsData();
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
+  async function handleValetRetrieval(valetId) {
+    try {
+      const res = await api.requestValetRetrieval(token, valetId);
+      setNotice(res.message);
+      loadOperationsData();
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
+  async function handleIssueViolation(e) {
+    e.preventDefault();
+    try {
+      const res = await api.issueViolation(token, violationForm);
+      setNotice(res.message);
+      setViolationForm({ vehicle_number: "", violation_type: "OVERSTAY", fine_amount: 50 });
+      loadOperationsData();
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
+  async function handleDisputeViolation(violationId) {
+    const reason = prompt("Enter reason for disputing this penalty violation:");
+    if (!reason) return;
+    try {
+      const res = await api.disputeViolation(token, { violation_id: violationId, dispute_reason: reason });
+      setNotice(res.message);
+      loadOperationsData();
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
   if (!token || !user) {
     return (
       <AuthScreen
@@ -1020,6 +1158,50 @@ function App() {
               </button>
             </div>
           </section>
+
+          {/* SRS Module Navigation Bar */}
+          <nav className="srs-module-nav">
+            <button
+              className={`module-tab-btn ${activeTab === "dashboard" ? "active" : ""}`}
+              onClick={() => setActiveTab("dashboard")}
+            >
+              📊 Core Dashboard
+            </button>
+            {isStaff && (
+              <button
+                className={`module-tab-btn ${activeTab === "gate" ? "active" : ""}`}
+                onClick={() => setActiveTab("gate")}
+              >
+                🎟️ Gate Scanner (FR-3.3)
+              </button>
+            )}
+            <button
+              className={`module-tab-btn ${activeTab === "queue" ? "active" : ""}`}
+              onClick={() => setActiveTab("queue")}
+            >
+              ⏳ Virtual Queue (FR-3.6)
+            </button>
+            <button
+              className={`module-tab-btn ${activeTab === "valet" ? "active" : ""}`}
+              onClick={() => setActiveTab("valet")}
+            >
+              🔑 Valet Parking (FR-3.7)
+            </button>
+            <button
+              className={`module-tab-btn ${activeTab === "violations" ? "active" : ""}`}
+              onClick={() => setActiveTab("violations")}
+            >
+              ⚠️ Violations (FR-3.8)
+            </button>
+            {(role === "BRANCH_MANAGER" || isSuperAdmin) && (
+              <button
+                className={`module-tab-btn ${activeTab === "analytics" ? "active" : ""}`}
+                onClick={() => setActiveTab("analytics")}
+              >
+                📈 Analytics & Reports (FR-3.9)
+              </button>
+            )}
+          </nav>
 
           {/* Alert Banners */}
           {error && (
@@ -1333,37 +1515,47 @@ function App() {
                               </span>
                             </td>
                             <td className="cell-actions">
-                              {options.length > 0 ? (
-                                <div className="action-buttons">
-                                  {options.map((status) => {
-                                    const isCancel = status === "CANCELLED";
-                                    const isConfirm = status === "CONFIRMED";
-                                    const isActive = status === "ACTIVE";
+                              <div className="action-buttons">
+                                <button
+                                  className="small-button btn-confirm"
+                                  onClick={() => openQrModal(booking.booking_id)}
+                                  title="View Entrance QR Code & OTP Pass"
+                                >
+                                  🎟️ QR Pass
+                                </button>
+                                <button
+                                  className="small-button"
+                                  onClick={() => openInvoiceModal(booking.booking_id)}
+                                  title="View Digital Invoice"
+                                >
+                                  📄 Invoice
+                                </button>
+                                {options.map((status) => {
+                                  const isCancel = status === "CANCELLED";
+                                  const isConfirm = status === "CONFIRMED";
+                                  const isActive = status === "ACTIVE";
 
-                                    let btnClass = "small-button";
-                                    if (isCancel) btnClass += " btn-cancel";
-                                    else if (isConfirm) btnClass += " btn-confirm";
-                                    else if (isActive) btnClass += " btn-active";
+                                  let btnClass = "small-button";
+                                  if (isCancel) btnClass += " btn-cancel";
+                                  else if (isConfirm) btnClass += " btn-confirm";
+                                  else if (isActive) btnClass += " btn-active";
 
-                                    return (
-                                      <button
-                                        key={status}
-                                        className={btnClass}
-                                        onClick={() =>
-                                          handleStatusUpdate(
-                                            booking.booking_id,
-                                            status
-                                          )
-                                        }
-                                      >
-                                        {isCancel ? "Cancel" : status}
-                                      </button>
-                                    );
-                                  })}
-                                </div>
-                              ) : (
-                                <span className="cell-muted-text">None</span>
-                              )}
+                                  return (
+                                    <button
+                                      key={status}
+                                      className={btnClass}
+                                      onClick={() =>
+                                        handleStatusUpdate(
+                                          booking.booking_id,
+                                          status
+                                        )
+                                      }
+                                    >
+                                      {isCancel ? "Cancel" : status}
+                                    </button>
+                                  );
+                                })}
+                              </div>
                             </td>
                           </tr>
                         );
@@ -1545,8 +1737,8 @@ function App() {
             </article>
           </section>
 
-          {/* Super Administrator Audit Log Panel */}
-          {isSuperAdmin && (
+          {/* SUPER ADMINISTRATOR AUDIT LOG PANEL */}
+          {activeTab === "dashboard" && isSuperAdmin && (
             <section className="panel audit-panel">
               <div className="panel-header">
                 <div className="panel-title-group">
@@ -1627,6 +1819,396 @@ function App() {
                 </div>
               )}
             </section>
+          )}
+
+          {/* MODULE 3.3: OPERATOR GATE SCANNER VIEW */}
+          {activeTab === "gate" && isStaff && (
+            <section className="panel operations-panel">
+              <div className="panel-header">
+                <div className="panel-title-group">
+                  <span className="panel-badge highlight">FR-3.3 GATE & ENTRY VERIFICATION</span>
+                  <h2>Operator Gate Terminal</h2>
+                  <p className="panel-subtitle">Verify QR Code / 6-digit OTP to authorize vehicle entry and release slots upon exit.</p>
+                </div>
+              </div>
+
+              <div className="gate-scanner-grid">
+                <div className="scanner-form-card">
+                  <h3>⚡ Instant Check-in Verification</h3>
+                  <p className="field-hint">Enter the 6-digit OTP presented by the driver or their Booking ID:</p>
+                  <form onSubmit={handleOperatorEntry} className="gate-entry-form">
+                    <div className="form-group">
+                      <label>Driver 6-Digit OTP:</label>
+                      <input
+                        type="text"
+                        placeholder="e.g. 583921"
+                        maxLength={6}
+                        value={operatorOtpInput}
+                        onChange={(e) => setOperatorOtpInput(e.target.value)}
+                      />
+                    </div>
+                    <div className="form-group">
+                      <label>Or Booking ID #:</label>
+                      <input
+                        type="number"
+                        placeholder="e.g. 2"
+                        value={operatorBookingInput}
+                        onChange={(e) => setOperatorBookingInput(e.target.value)}
+                      />
+                    </div>
+                    <button type="submit" className="primary-button">
+                      Verify & Check-in (Mark Occupied)
+                    </button>
+                  </form>
+                </div>
+
+                <div className="scanner-active-sessions">
+                  <h3>Active Vehicles in Lot (One-Click Exit)</h3>
+                  {bookings.filter(b => b.booking_status === "ACTIVE").length === 0 ? (
+                    <div className="empty-state-mini">
+                      <p>No vehicles currently marked as ACTIVE in this lot.</p>
+                    </div>
+                  ) : (
+                    <div className="active-exit-list">
+                      {bookings.filter(b => b.booking_status === "ACTIVE").map(b => (
+                        <div key={b.booking_id} className="active-exit-item">
+                          <div>
+                            <strong>Booking #{b.booking_id}</strong> · <span className="slot-badge">Slot {b.slot_id}</span>
+                            <div className="text-muted text-xs">Entered: {formatDate(b.expected_entry_time)}</div>
+                          </div>
+                          <button
+                            className="small-button btn-confirm"
+                            onClick={() => handleOperatorExit(b.booking_id)}
+                          >
+                            Mark Vehicle Exit (Free Slot)
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </section>
+          )}
+
+          {/* MODULE 3.6: VIRTUAL QUEUE MANAGEMENT VIEW */}
+          {activeTab === "queue" && (
+            <section className="panel operations-panel">
+              <div className="panel-header">
+                <div className="panel-title-group">
+                  <span className="panel-badge highlight">FR-3.6 VIRTUAL QUEUE SYSTEM</span>
+                  <h2>Virtual Waiting Queue</h2>
+                  <p className="panel-subtitle">When capacity is full, drivers join the queue and receive automated slot alerts.</p>
+                </div>
+                <button className="primary-button" onClick={handleJoinQueue}>
+                  + Join Waiting Queue
+                </button>
+              </div>
+
+              <div className="table-responsive">
+                <table className="cpos-table">
+                  <thead>
+                    <tr>
+                      <th>Position #</th>
+                      <th>Driver / User</th>
+                      <th>Status</th>
+                      <th>Joined Time</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {queueData.length === 0 ? (
+                      <tr><td colSpan={4} className="text-center">No drivers currently in waiting queue.</td></tr>
+                    ) : (
+                      queueData.map((q) => (
+                        <tr key={q.queue_id}>
+                          <td><span className="id-badge">#{q.queue_number}</span></td>
+                          <td><strong>{q.full_name}</strong> ({q.email})</td>
+                          <td><span className="status-pill status-active">{q.queue_status}</span></td>
+                          <td>{formatDate(q.joined_at)}</td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </section>
+          )}
+
+          {/* MODULE 3.7: DIGITAL VALET MANAGEMENT VIEW */}
+          {activeTab === "valet" && (
+            <section className="panel operations-panel">
+              <div className="panel-header">
+                <div className="panel-title-group">
+                  <span className="panel-badge highlight">FR-3.7 DIGITAL VALET SYSTEM</span>
+                  <h2>Valet Vehicle Management</h2>
+                  <p className="panel-subtitle">Assign vehicles to staff, track key tags, and dispatch retrieval requests.</p>
+                </div>
+              </div>
+
+              <div className="table-responsive">
+                <table className="cpos-table">
+                  <thead>
+                    <tr>
+                      <th>Valet ID</th>
+                      <th>Vehicle Number</th>
+                      <th>Key Tag</th>
+                      <th>Staff Name</th>
+                      <th>Status</th>
+                      <th>Action</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {valetData.length === 0 ? (
+                      <tr><td colSpan={6} className="text-center">No active valet vehicle records found.</td></tr>
+                    ) : (
+                      valetData.map((v) => (
+                        <tr key={v.valet_id}>
+                          <td>#{v.valet_id}</td>
+                          <td><strong>{v.vehicle_number}</strong> ({v.model})</td>
+                          <td><span className="slot-badge">Tag {v.key_tag_number}</span></td>
+                          <td>{v.valet_staff_name}</td>
+                          <td><span className="status-pill status-active">{v.valet_status}</span></td>
+                          <td>
+                            {!v.retrieval_requested ? (
+                              <button
+                                className="small-button btn-confirm"
+                                onClick={() => handleValetRetrieval(v.valet_id)}
+                              >
+                                Request Retrieval
+                              </button>
+                            ) : (
+                              <span className="text-muted">Retrieval Dispatched</span>
+                            )}
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </section>
+          )}
+
+          {/* MODULE 3.8: VIOLATIONS & PENALTY MANAGEMENT VIEW */}
+          {activeTab === "violations" && (
+            <section className="panel operations-panel">
+              <div className="panel-header">
+                <div className="panel-title-group">
+                  <span className="panel-badge highlight">FR-3.8 VIOLATION & PENALTY ENGINE</span>
+                  <h2>Parking Violations & Disputes</h2>
+                  <p className="panel-subtitle">Record parking violations, generate fine notices, and manage disputes.</p>
+                </div>
+              </div>
+
+              {isStaff && (
+                <div className="violation-form-card">
+                  <h3>Issue Violation Notice</h3>
+                  <form onSubmit={handleIssueViolation} className="form-row">
+                    <div className="form-group">
+                      <label>License Plate #:</label>
+                      <input
+                        required
+                        placeholder="e.g. TN-07-AB-1234"
+                        value={violationForm.vehicle_number}
+                        onChange={(e) => setViolationForm({...violationForm, vehicle_number: e.target.value})}
+                      />
+                    </div>
+                    <div className="form-group">
+                      <label>Violation Type:</label>
+                      <select
+                        value={violationForm.violation_type}
+                        onChange={(e) => setViolationForm({...violationForm, violation_type: e.target.value})}
+                      >
+                        <option value="OVERSTAY">Overstay Duration Exceeded</option>
+                        <option value="UNAUTHORIZED">Unauthorized / Double Parking</option>
+                        <option value="BLOCKED_FIRE_LANE">Blocking Emergency / EV Bay</option>
+                      </select>
+                    </div>
+                    <div className="form-group">
+                      <label>Fine Amount ($):</label>
+                      <input
+                        type="number"
+                        min="10"
+                        value={violationForm.fine_amount}
+                        onChange={(e) => setViolationForm({...violationForm, fine_amount: Number(e.target.value)})}
+                      />
+                    </div>
+                    <div className="form-group" style={{ alignSelf: "flex-end" }}>
+                      <button type="submit" className="primary-button">
+                        Issue Penalty
+                      </button>
+                    </div>
+                  </form>
+                </div>
+              )}
+
+              <div className="table-responsive">
+                <table className="cpos-table">
+                  <thead>
+                    <tr>
+                      <th>Notice #</th>
+                      <th>Vehicle Plate</th>
+                      <th>Violation Type</th>
+                      <th>Penalty Fee</th>
+                      <th>Status</th>
+                      <th>Dispute Reason</th>
+                      <th>Action</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {violationsData.length === 0 ? (
+                      <tr><td colSpan={7} className="text-center">No violations recorded.</td></tr>
+                    ) : (
+                      violationsData.map((viol) => (
+                        <tr key={viol.violation_id}>
+                          <td><span className="id-badge audit">#{viol.violation_id}</span></td>
+                          <td><strong>{viol.vehicle_number}</strong></td>
+                          <td>{viol.violation_type}</td>
+                          <td><strong>${Number(viol.fine_amount).toFixed(2)}</strong></td>
+                          <td><span className="status-pill status-active">{viol.penalty_status}</span></td>
+                          <td>{viol.dispute_reason || "None"}</td>
+                          <td>
+                            {viol.penalty_status === "ISSUED" && (
+                              <button
+                                className="small-button btn-cancel"
+                                onClick={() => handleDisputeViolation(viol.violation_id)}
+                              >
+                                Submit Dispute
+                              </button>
+                            )}
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </section>
+          )}
+
+          {/* MODULE 3.9: REPORTS & ANALYTICS VIEW */}
+          {activeTab === "analytics" && (role === "BRANCH_MANAGER" || isSuperAdmin) && (
+            <section className="panel operations-panel">
+              <div className="panel-header">
+                <div className="panel-title-group">
+                  <span className="panel-badge highlight">FR-3.9 REPORTS & ANALYTICS</span>
+                  <h2>Facility Utilization & Financial Performance</h2>
+                  <p className="panel-subtitle">Real-time operational metrics and digital financial summaries.</p>
+                </div>
+                <button
+                  className="secondary-button"
+                  onClick={() => window.print()}
+                  title="Print / Export Report as PDF"
+                >
+                  📄 Export Report (PDF)
+                </button>
+              </div>
+
+              {analyticsData ? (
+                <div className="analytics-grid">
+                  <div className="analytics-card">
+                    <span className="analytics-metric-title">Facility Occupancy Rate</span>
+                    <span className="analytics-metric-val">{analyticsData.occupancy_rate}</span>
+                    <span className="text-muted text-xs">{analyticsData.occupied_slots} occupied of {analyticsData.total_slots} total bays</span>
+                  </div>
+                  <div className="analytics-card">
+                    <span className="analytics-metric-title">Gross Revenue Generated</span>
+                    <span className="analytics-metric-val">${Number(analyticsData.total_revenue).toFixed(2)}</span>
+                    <span className="text-muted text-xs">{analyticsData.total_invoices} digital invoices billed</span>
+                  </div>
+                  <div className="analytics-card">
+                    <span className="analytics-metric-title">Total Processed Bookings</span>
+                    <span className="analytics-metric-val">{analyticsData.reservations?.total_reservations || 0}</span>
+                    <span className="text-muted text-xs">{analyticsData.reservations?.active_reservations || 0} active · {analyticsData.reservations?.completed_reservations || 0} checked out</span>
+                  </div>
+                </div>
+              ) : (
+                <div className="loading-state">
+                  <span className="spinner"></span>
+                  <p>Calculating live facility analytics...</p>
+                </div>
+              )}
+            </section>
+          )}
+
+          {/* MODAL: QR CODE & OTP ENTRY PASS (FR-3.3) */}
+          {modalQrData && (
+            <div className="modal-overlay" onClick={() => setModalQrData(null)}>
+              <div className="modal-dialog" onClick={(e) => e.stopPropagation()}>
+                <div className="modal-header">
+                  <h3>🎟️ Smart Entry Pass (Booking #{modalQrData.booking_id})</h3>
+                  <button className="modal-close-btn" onClick={() => setModalQrData(null)}>×</button>
+                </div>
+                <div className="modal-body qr-modal-body">
+                  <div className="qr-box-visual">
+                    <div className="qr-mock-code">
+                      <div className="qr-scan-line"></div>
+                      <div className="qr-corner tl"></div>
+                      <div className="qr-corner tr"></div>
+                      <div className="qr-corner bl"></div>
+                      <div className="qr-corner br"></div>
+                      <span className="qr-text-tag">{modalQrData.qr_code}</span>
+                    </div>
+                  </div>
+                  <div className="otp-display-box">
+                    <span className="otp-label">Entrance Gate 6-Digit OTP:</span>
+                    <strong className="otp-code-large">{modalQrData.otp}</strong>
+                    <span className="otp-hint">Present this QR code or 6-digit OTP to the parking gate operator upon arrival.</span>
+                  </div>
+                  <div className="modal-info-pills">
+                    <span>Slot Allocated: <strong>#{modalQrData.slot_id}</strong></span>
+                    <span>Status: <strong>{modalQrData.verification_status}</strong></span>
+                  </div>
+                </div>
+                <div className="modal-footer">
+                  <button className="primary-button" onClick={() => setModalQrData(null)}>Done</button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* MODAL: DIGITAL INVOICE (FR-3.4) */}
+          {modalInvoiceData && (
+            <div className="modal-overlay" onClick={() => setModalInvoiceData(null)}>
+              <div className="modal-dialog" onClick={(e) => e.stopPropagation()}>
+                <div className="modal-header">
+                  <h3>📄 Digital Parking Invoice</h3>
+                  <button className="modal-close-btn" onClick={() => setModalInvoiceData(null)}>×</button>
+                </div>
+                <div className="modal-body invoice-modal-body">
+                  <div className="invoice-receipt-card">
+                    <div className="invoice-top">
+                      <div>
+                        <strong>CPOS Operations Facility</strong>
+                        <div className="text-muted text-xs">Tax ID: CPOS-TAX-98240</div>
+                      </div>
+                      <div className="invoice-num-tag">{modalInvoiceData.invoice_number}</div>
+                    </div>
+                    <hr className="receipt-divider" />
+                    <div className="receipt-row">
+                      <span>Parking Reservation Fee</span>
+                      <span>${Number(modalInvoiceData.subtotal || 22.73).toFixed(2)}</span>
+                    </div>
+                    <div className="receipt-row">
+                      <span>Service Tax (10%)</span>
+                      <span>${Number(modalInvoiceData.tax || 2.27).toFixed(2)}</span>
+                    </div>
+                    <hr className="receipt-divider" />
+                    <div className="receipt-row total-row">
+                      <strong>Total Paid</strong>
+                      <strong className="receipt-total-val">${Number(modalInvoiceData.total_amount || 25.00).toFixed(2)}</strong>
+                    </div>
+                    <div className="receipt-footer-tag">
+                      ✅ Paid via {modalInvoiceData.payment_method || "CARD"} · Ref: {modalInvoiceData.transaction_reference || "TXN-APPROVED"}
+                    </div>
+                  </div>
+                </div>
+                <div className="modal-footer">
+                  <button className="secondary-button" onClick={() => window.print()}>Print Receipt</button>
+                  <button className="primary-button" onClick={() => setModalInvoiceData(null)}>Close</button>
+                </div>
+              </div>
+            </div>
           )}
 
           {/* Clean Dashboard Footer */}
