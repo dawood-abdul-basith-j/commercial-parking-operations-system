@@ -1226,8 +1226,10 @@ function App() {
             </div>
           )}
 
-          {/* Metric Summary Cards */}
-          <section className="summary-grid">
+          {/* Core Dashboard View (Summary Cards, Floor Map, Reservations Table & Booking Form) */}
+          {activeTab === "dashboard" && (
+            <>
+              <section className="summary-grid">
             <article className="summary-card">
               <div className="summary-card-header">
                 <span className="summary-label">Total Reservations</span>
@@ -1819,6 +1821,8 @@ function App() {
                 </div>
               )}
             </section>
+          )}
+            </>
           )}
 
           {/* MODULE 3.3: OPERATOR GATE SCANNER VIEW */}
