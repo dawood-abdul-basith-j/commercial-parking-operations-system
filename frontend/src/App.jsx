@@ -707,6 +707,14 @@ function App() {
   const isSuperAdmin = role === "SUPER_ADMINISTRATOR";
   const isStaff = ["PARKING_OPERATOR", "BRANCH_MANAGER", "SUPER_ADMINISTRATOR"].includes(role);
 
+  const vacantSlotsCount = PARKING_LOT_SLOTS.filter((slot) => {
+    const isBooked = bookings.some(
+      (b) => Number(b.slot_id) === slot.id && ["ACTIVE", "CONFIRMED"].includes(b.booking_status)
+    );
+    return !isBooked;
+  }).length;
+  const isFacilityFull = vacantSlotsCount === 0;
+
   useEffect(() => {
     if (!token) return undefined;
 
@@ -1013,6 +1021,12 @@ function App() {
   }, [activeTab, token, refreshKey]);
 
   async function handleJoinQueue() {
+    if (!isFacilityFull) {
+      setError(
+        `Cannot join virtual queue: There are still ${vacantSlotsCount} available parking slot(s). Virtual queue is only allowed when every slot is filled.`
+      );
+      return;
+    }
     try {
       const res = await api.joinQueue(token);
       setNotice(res.message);
@@ -1902,11 +1916,40 @@ function App() {
                 <div className="panel-title-group">
                   <span className="panel-badge highlight">FR-3.6 VIRTUAL QUEUE SYSTEM</span>
                   <h2>Virtual Waiting Queue</h2>
-                  <p className="panel-subtitle">When capacity is full, drivers join the queue and receive automated slot alerts.</p>
+                  <p className="panel-subtitle">
+                    {isFacilityFull ? (
+                      <span style={{ color: "var(--danger-primary)", fontWeight: 700 }}>
+                        🔴 100% Facility Capacity Reached! All {PARKING_LOT_SLOTS.length} slots are filled. Virtual queue is open.
+                      </span>
+                    ) : (
+                      <span style={{ color: "var(--primary-600)", fontWeight: 600 }}>
+                        🟢 Direct Reservation Available: {vacantSlotsCount} of {PARKING_LOT_SLOTS.length} slot(s) are currently vacant. Virtual queue opens only when all slots are filled.
+                      </span>
+                    )}
+                  </p>
                 </div>
-                <button className="primary-button" onClick={handleJoinQueue}>
-                  + Join Waiting Queue
-                </button>
+                <div style={{ display: "flex", gap: "10px", alignItems: "center" }}>
+                  {!isFacilityFull && (
+                    <button
+                      className="secondary-button"
+                      onClick={() => setActiveTab("dashboard")}
+                    >
+                      📊 Book Slot Directly ({vacantSlotsCount} Available)
+                    </button>
+                  )}
+                  <button
+                    className="primary-button"
+                    disabled={!isFacilityFull}
+                    onClick={handleJoinQueue}
+                    title={
+                      !isFacilityFull
+                        ? `Cannot join queue: ${vacantSlotsCount} slot(s) are still vacant. Direct reservation is available.`
+                        : "Join the virtual waiting queue"
+                    }
+                  >
+                    {isFacilityFull ? "+ Join Waiting Queue" : "🔒 Queue Locked (Slots Available)"}
+                  </button>
+                </div>
               </div>
 
               <div className="table-responsive">

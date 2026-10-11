@@ -310,8 +310,44 @@ router.get("/queue", async (req, res) => {
 
 router.post("/queue/join", async (req, res) => {
   try {
+    // 1. Verify if facility is completely filled (100% capacity)
+    const [slots] = await db.execute(
+      "SELECT slot_id, slot_status, occupied FROM parking_slots WHERE is_active = TRUE"
+    );
+
+    // Check which slots have active or confirmed reservations
+    const [activeBookings] = await db.execute(
+      "SELECT DISTINCT slot_id FROM bookings WHERE booking_status IN ('ACTIVE', 'CONFIRMED')"
+    );
+    const occupiedSlotIds = new Set(activeBookings.map((b) => b.slot_id));
+
+    // A slot is vacant if it is NOT occupied in parking_slots AND has NO active/confirmed booking
+    const vacantSlots = slots.filter(
+      (s) => !s.occupied && s.slot_status === "AVAILABLE" && !occupiedSlotIds.has(s.slot_id)
+    );
+
+    if (vacantSlots.length > 0) {
+      return res.status(400).json({
+        success: false,
+        message: `Cannot join virtual queue: There are still ${vacantSlots.length} available parking slot(s). Virtual queue is only allowed when every slot is filled.`,
+        vacant_slots_count: vacantSlots.length
+      });
+    }
+
     const [customers] = await db.execute("SELECT customer_id FROM customers WHERE user_id = ?", [req.user.user_id]);
     const customerId = customers[0]?.customer_id || 1;
+
+    // Check if customer is already in waiting queue
+    const [existingQ] = await db.execute(
+      "SELECT queue_id, queue_number FROM virtual_queues WHERE customer_id = ? AND queue_status = 'WAITING'",
+      [customerId]
+    );
+    if (existingQ.length > 0) {
+      return res.status(400).json({
+        success: false,
+        message: `You are already waiting in the virtual queue at Position #${existingQ[0].queue_number}.`
+      });
+    }
 
     const [maxQ] = await db.execute("SELECT MAX(queue_number) AS max_num FROM virtual_queues WHERE queue_status = 'WAITING'");
     const nextNum = (maxQ[0]?.max_num || 0) + 1;
@@ -324,11 +360,12 @@ router.post("/queue/join", async (req, res) => {
 
     return res.status(201).json({
       success: true,
-      message: `Joined virtual queue at Position #${nextNum}. You will be notified when a slot opens.`,
+      message: `Facility is 100% full. Joined virtual queue at Position #${nextNum}. You will be alerted when a slot opens.`,
       queue_id: result.insertId,
       queue_position: nextNum
     });
   } catch (err) {
+    console.error("Queue join error:", err.message);
     return res.status(500).json({ success: false, message: "Failed to join queue." });
   }
 });
