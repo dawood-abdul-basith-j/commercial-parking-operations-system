@@ -603,6 +603,51 @@ function AuthScreen({
   );
 }
 
+// URL Route Synchronization & Comprehensive Route Mapping
+const ROUTE_ALIASES = {
+  dashboard: "dashboard",
+  bookings: "dashboard",
+  reservations: "dashboard",
+  parking: "dashboard",
+  map: "dashboard",
+  audit: "dashboard",
+  logs: "dashboard",
+  gate: "gate",
+  scanner: "gate",
+  queue: "queue",
+  "virtual-queue": "queue",
+  valet: "valet",
+  violations: "violations",
+  compliance: "violations",
+  disputes: "violations",
+  analytics: "analytics",
+  reports: "analytics",
+};
+
+function resolveRoute() {
+  let path = window.location.pathname.replace(/^\//, "").trim();
+  if (!path && window.location.hash) {
+    path = window.location.hash.replace(/^#\/?/, "").trim();
+  }
+  const clean = path.toLowerCase();
+
+  // Dedicated Auth Routes
+  if (clean === "login" || clean === "register") {
+    return { tab: "auth", authMode: clean, raw: clean };
+  }
+
+  // Default root / or /dashboard
+  if (!clean || clean === "dashboard") {
+    return { tab: "dashboard", authMode: "login", raw: "dashboard" };
+  }
+
+  if (ROUTE_ALIASES[clean]) {
+    return { tab: ROUTE_ALIASES[clean], authMode: "login", raw: clean };
+  }
+
+  return { tab: "404", authMode: "login", raw: path };
+}
+
 function App() {
   const [token, setToken] = useState(() => localStorage.getItem("cpos_token") || null);
   const [user, setUser] = useState(() => {
@@ -657,55 +702,9 @@ function App() {
     }
   }, [user]);
 
-  // URL Route Synchronization & Comprehensive Route Mapping
-  const ROUTE_ALIASES = {
-    dashboard: "dashboard",
-    bookings: "dashboard",
-    reservations: "dashboard",
-    parking: "dashboard",
-    map: "dashboard",
-    audit: "dashboard",
-    logs: "dashboard",
-    gate: "gate",
-    scanner: "gate",
-    queue: "queue",
-    "virtual-queue": "queue",
-    valet: "valet",
-    violations: "violations",
-    compliance: "violations",
-    disputes: "violations",
-    analytics: "analytics",
-    reports: "analytics",
-  };
-
-  function resolveRoute() {
-    let path = window.location.pathname.replace(/^\//, "").trim();
-    if (!path && window.location.hash) {
-      path = window.location.hash.replace(/^#\/?/, "").trim();
-    }
-    const clean = path.toLowerCase();
-
-    // Dedicated Auth Routes
-    if (clean === "login" || clean === "register") {
-      return { tab: "auth", authMode: clean, raw: clean };
-    }
-
-    // Default root / or /dashboard
-    if (!clean || clean === "dashboard") {
-      return { tab: "dashboard", authMode: "login", raw: "dashboard" };
-    }
-
-    if (ROUTE_ALIASES[clean]) {
-      return { tab: ROUTE_ALIASES[clean], authMode: "login", raw: clean };
-    }
-
-    return { tab: "404", authMode: "login", raw: path };
-  }
-
-  const initialRoute = resolveRoute();
-  const [activeTab, setActiveTab] = useState(initialRoute.tab);
-  const [currentRoutePath, setCurrentRoutePath] = useState(initialRoute.raw);
-  const [mode, setMode] = useState(initialRoute.authMode);
+  const [activeTab, setActiveTab] = useState(() => resolveRoute().tab);
+  const [currentRoutePath, setCurrentRoutePath] = useState(() => resolveRoute().raw);
+  const [mode, setMode] = useState(() => resolveRoute().authMode);
   const [emailCopied, setEmailCopied] = useState(false);
 
   function handleSetMode(nextMode) {
@@ -736,7 +735,7 @@ function App() {
 
     // If logged out and on root '/', update URL to match auth mode (/login or /register)
     if (!token && (window.location.pathname === "/" || window.location.pathname === "")) {
-      window.history.replaceState({}, "", `/${initialRoute.authMode}`);
+      window.history.replaceState({}, "", "/login");
     }
 
     return () => {
