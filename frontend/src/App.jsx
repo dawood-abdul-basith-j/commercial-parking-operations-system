@@ -650,17 +650,18 @@ function App() {
   }, [user]);
 
   // URL Route Synchronization & 404 Route Detection
+  const KNOWN_TABS = ["dashboard", "gate", "queue", "valet", "violations", "analytics"];
+
   function resolveRoute() {
-    let path = window.location.hash.replace(/^#\/?/, "").trim();
-    if (!path && window.location.pathname && window.location.pathname !== "/") {
-      path = window.location.pathname.replace(/^\//, "").trim();
+    let path = window.location.pathname.replace(/^\//, "").trim();
+    if (!path && window.location.hash) {
+      path = window.location.hash.replace(/^#\/?/, "").trim();
     }
     const clean = path.toLowerCase();
-    if (!clean || clean === "dashboard") return { tab: "dashboard", raw: path || "dashboard" };
+    if (!clean || clean === "dashboard") return { tab: "dashboard", raw: "dashboard" };
 
-    const KNOWN_TABS = ["dashboard", "gate", "queue", "valet", "violations", "analytics"];
     if (KNOWN_TABS.includes(clean)) {
-      return { tab: clean, raw: path };
+      return { tab: clean, raw: clean };
     }
     return { tab: "404", raw: path };
   }
@@ -672,7 +673,8 @@ function App() {
   function navigateToTab(tab) {
     setActiveTab(tab);
     setCurrentRoutePath(tab);
-    window.location.hash = `#/${tab}`;
+    const targetUrl = tab === "dashboard" ? "/" : `/${tab}`;
+    window.history.pushState({}, "", targetUrl);
   }
 
   // Listen to browser URL route changes (Back / Forward buttons, URL typing)
@@ -683,16 +685,13 @@ function App() {
       setCurrentRoutePath(route.raw);
     };
 
-    window.addEventListener("hashchange", handleRouteChange);
     window.addEventListener("popstate", handleRouteChange);
-    if (!window.location.hash && token) {
-      window.location.hash = "#/dashboard";
-    }
+    window.addEventListener("hashchange", handleRouteChange);
     return () => {
-      window.removeEventListener("hashchange", handleRouteChange);
       window.removeEventListener("popstate", handleRouteChange);
+      window.removeEventListener("hashchange", handleRouteChange);
     };
-  }, [token]);
+  }, []);
 
   const [auditLogs, setAuditLogs] = useState([]);
   const [auditPagination, setAuditPagination] = useState(null);
@@ -1104,6 +1103,30 @@ function App() {
     } catch (err) {
       setError(err.message);
     }
+  }
+
+  if (activeTab === "404") {
+    return (
+      <div className="app-shell" style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", padding: "20px" }}>
+        <section className="panel not-found-panel" style={{ maxWidth: "600px", width: "100%" }}>
+          <div className="not-found-content">
+            <div className="not-found-badge">404 ERROR</div>
+            <h1 className="not-found-title">Page Not Found</h1>
+            <p className="not-found-desc">
+              The requested route <code>/{currentRoutePath}</code> does not exist, was moved, or is not available.
+            </p>
+            <div className="not-found-actions">
+              <button
+                className="primary-button"
+                onClick={() => navigateToTab("dashboard")}
+              >
+                {token && user ? "← Return to Core Dashboard" : "← Return to Sign In"}
+              </button>
+            </div>
+          </div>
+        </section>
+      </div>
+    );
   }
 
   if (!token || !user) {
