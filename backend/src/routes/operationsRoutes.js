@@ -1,0 +1,622 @@
+const express = require("express");
+const db = require("../config/db");
+const { authenticateToken, requireRole } = require("../middleware/authMiddleware");
+
+const router = express.Router();
+router.use(authenticateToken);
+
+// -------------------------------------------------------------
+// MODULE 3.3: QR CODE & ENTRY MANAGEMENT
+// -------------------------------------------------------------
+
+// FR-3.3.1: Get QR Code and OTP for a booking
+router.get("/qr/:bookingId", async (req, res) => {
+  const bookingId = Number(req.params.bookingId);
+  try {
+    const [rows] = await db.execute(
+      `SELECT q.qr_code, q.otp, q.expiry_time, q.verification_status,
+              b.booking_id, b.slot_id, b.booking_status
+       FROM bookings b
+       LEFT JOIN qr_verifications q ON q.booking_id = b.booking_id
+       WHERE b.booking_id = ?`,
+      [bookingId]
+    );
+
+    if (rows.length === 0) {
+      return res.status(404).json({ success: false, message: "Booking not found." });
+    }
+
+    let record = rows[0];
+
+    // Role access control: Customers can ONLY access their own booking QR
+    if (req.user.role === "CUSTOMER") {
+      const [customers] = await db.execute("SELECT customer_id FROM customers WHERE user_id = ?", [req.user.user_id]);
+      const customerId = customers[0]?.customer_id;
+      const [bookingOwner] = await db.execute("SELECT customer_id FROM bookings WHERE booking_id = ?", [bookingId]);
+      if (bookingOwner.length === 0 || bookingOwner[0].customer_id !== customerId) {
+        return res.status(403).json({ success: false, message: "Forbidden: You cannot access QR passes for other customers." });
+      }
+    }
+
+    // If QR record doesn't exist yet, auto-generate one
+    if (!record.qr_code) {
+      const generatedOtp = String(Math.floor(100000 + Math.random() * 900000));
+      const qrPayload = `CPOS-ENTRY:BK-${bookingId}:OTP-${generatedOtp}`;
+      const expiry = new Date(Date.now() + 24 * 60 * 60 * 1000);
+
+      await db.execute(
+        `INSERT INTO qr_verifications (booking_id, qr_code, otp, expiry_time, verification_status)
+         VALUES (?, ?, ?, ?, 'PENDING')`,
+        [bookingId, qrPayload, generatedOtp, expiry]
+      );
+
+      record = {
+        booking_id: bookingId,
+        slot_id: record.slot_id,
+        booking_status: record.booking_status,
+        qr_code: qrPayload,
+        otp: generatedOtp,
+        expiry_time: expiry,
+        verification_status: "PENDING"
+      };
+    }
+
+    return res.status(200).json({ success: true, data: record });
+  } catch (err) {
+    console.error("QR lookup error:", err.message);
+    return res.status(500).json({ success: false, message: "Failed to retrieve QR code." });
+  }
+});
+
+// FR-3.3.2 & FR-3.3.3: Operator verifies QR/OTP for Vehicle Entry
+router.post("/entry/verify", requireRole(["PARKING_OPERATOR", "BRANCH_MANAGER", "SUPER_ADMINISTRATOR"]), async (req, res) => {
+  const { otp, booking_id } = req.body;
+  if (!otp && !booking_id) {
+    return res.status(400).json({ success: false, message: "Booking ID or OTP required." });
+  }
+
+  let connection;
+  try {
+    connection = await db.getConnection();
+    await connection.beginTransaction();
+
+    let query = `SELECT q.*, b.slot_id, b.booking_status 
+                 FROM qr_verifications q 
+                 JOIN bookings b ON b.booking_id = q.booking_id 
+                 WHERE `;
+    const params = [];
+    if (otp) {
+      query += `q.otp = ?`;
+      params.push(String(otp).trim());
+    } else {
+      query += `q.booking_id = ?`;
+      params.push(Number(booking_id));
+    }
+
+    const [qrs] = await connection.execute(query, params);
+    if (qrs.length === 0) {
+      await connection.rollback();
+      return res.status(404).json({ success: false, message: "Invalid or unrecognized QR/OTP pass." });
+    }
+
+    const record = qrs[0];
+
+    // Transition booking to ACTIVE and slot to OCCUPIED
+    await connection.execute(
+      `UPDATE bookings SET booking_status = 'ACTIVE' WHERE booking_id = ?`,
+      [record.booking_id]
+    );
+
+    await connection.execute(
+      `UPDATE parking_slots SET slot_status = 'OCCUPIED', occupied = TRUE WHERE slot_id = ?`,
+      [record.slot_id]
+    );
+
+    await connection.execute(
+      `UPDATE qr_verifications SET verification_status = 'VERIFIED' WHERE qr_id = ?`,
+      [record.qr_id]
+    );
+
+    // Record parking session check-in
+    await connection.execute(
+      `INSERT INTO parking_sessions (booking_id, check_in_time, session_status)
+       VALUES (?, NOW(), 'ACTIVE')`,
+      [record.booking_id]
+    );
+
+    await connection.commit();
+    return res.status(200).json({
+      success: true,
+      message: `Vehicle Check-in verified for Booking #${record.booking_id}. Slot #${record.slot_id} marked Occupied.`,
+      booking_id: record.booking_id,
+      slot_id: record.slot_id
+    });
+  } catch (err) {
+    if (connection) await connection.rollback();
+    console.error("Entry verification error:", err.message);
+    return res.status(500).json({ success: false, message: "Entry verification failed." });
+  } finally {
+    if (connection) connection.release();
+  }
+});
+
+// FR-3.3.4: Operator marks Vehicle Exit & releases Slot
+router.post("/exit/verify", requireRole(["PARKING_OPERATOR", "BRANCH_MANAGER", "SUPER_ADMINISTRATOR"]), async (req, res) => {
+  const { booking_id } = req.body;
+  if (!booking_id) {
+    return res.status(400).json({ success: false, message: "Booking ID is required for checkout." });
+  }
+
+  let connection;
+  try {
+    connection = await db.getConnection();
+    await connection.beginTransaction();
+
+    const [bks] = await connection.execute(
+      `SELECT booking_id, slot_id, booking_status FROM bookings WHERE booking_id = ?`,
+      [Number(booking_id)]
+    );
+
+    if (bks.length === 0) {
+      await connection.rollback();
+      return res.status(404).json({ success: false, message: "Booking not found." });
+    }
+
+    const booking = bks[0];
+
+    await connection.execute(
+      `UPDATE bookings SET booking_status = 'COMPLETED' WHERE booking_id = ?`,
+      [booking.booking_id]
+    );
+
+    await connection.execute(
+      `UPDATE parking_slots SET slot_status = 'AVAILABLE', occupied = FALSE WHERE slot_id = ?`,
+      [booking.slot_id]
+    );
+
+    await connection.execute(
+      `UPDATE parking_sessions 
+       SET check_out_time = NOW(), session_status = 'COMPLETED'
+       WHERE booking_id = ? AND session_status = 'ACTIVE'`,
+      [booking.booking_id]
+    );
+
+    await connection.commit();
+    return res.status(200).json({
+      success: true,
+      message: `Vehicle Checkout complete for Booking #${booking.booking_id}. Slot #${booking.slot_id} is now Available.`,
+      booking_id: booking.booking_id,
+      slot_id: booking.slot_id
+    });
+  } catch (err) {
+    if (connection) await connection.rollback();
+    console.error("Exit verification error:", err.message);
+    return res.status(500).json({ success: false, message: "Exit verification failed." });
+  } finally {
+    if (connection) connection.release();
+  }
+});
+
+// -------------------------------------------------------------
+// MODULE 3.4: PAYMENT & INVOICE MANAGEMENT
+// -------------------------------------------------------------
+
+// FR-3.4.1: Process Online Payment
+router.post("/payments/process", async (req, res) => {
+  const { booking_id, payment_method, amount } = req.body;
+  if (!booking_id || !payment_method) {
+    return res.status(400).json({ success: false, message: "Booking ID and payment method required." });
+  }
+
+  let connection;
+  try {
+    connection = await db.getConnection();
+    await connection.beginTransaction();
+
+    const txRef = `TXN-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+    const payAmount = Number(amount || 25.00);
+    const tax = Number((payAmount * 0.10).toFixed(2));
+    const total = Number((payAmount + tax).toFixed(2));
+
+    const [payResult] = await connection.execute(
+      `INSERT INTO payments (booking_id, amount, tax, payment_method, transaction_reference, payment_status, payment_date)
+       VALUES (?, ?, ?, ?, ?, 'COMPLETED', NOW())`,
+      [Number(booking_id), payAmount, tax, payment_method, txRef]
+    );
+
+    const invoiceNumber = `INV-${new Date().getFullYear()}-${String(payResult.insertId).padStart(5, '0')}`;
+    await connection.execute(
+      `INSERT INTO invoices (booking_id, payment_id, invoice_number, subtotal, tax, total_amount, generated_date)
+       VALUES (?, ?, ?, ?, ?, ?, NOW())`,
+      [Number(booking_id), payResult.insertId, invoiceNumber, payAmount, tax, total]
+    );
+
+    await connection.commit();
+    return res.status(201).json({
+      success: true,
+      message: "Payment processed and digital invoice generated.",
+      data: {
+        payment_id: payResult.insertId,
+        transaction_reference: txRef,
+        invoice_number: invoiceNumber,
+        total_amount: total
+      }
+    });
+  } catch (err) {
+    if (connection) await connection.rollback();
+    console.error("Payment error:", err.message);
+    return res.status(500).json({ success: false, message: "Payment processing failed." });
+  } finally {
+    if (connection) connection.release();
+  }
+});
+
+// FR-3.4.2 & FR-3.4.3: Get Invoices & Payment History for Booking or User
+router.get("/invoices/booking/:bookingId", async (req, res) => {
+  const bookingId = Number(req.params.bookingId);
+  try {
+    if (req.user.role === "CUSTOMER") {
+      const [customers] = await db.execute("SELECT customer_id FROM customers WHERE user_id = ?", [req.user.user_id]);
+      const customerId = customers[0]?.customer_id;
+      const [bookingOwner] = await db.execute("SELECT customer_id FROM bookings WHERE booking_id = ?", [bookingId]);
+      if (bookingOwner.length === 0 || bookingOwner[0].customer_id !== customerId) {
+        return res.status(403).json({ success: false, message: "Forbidden: You cannot view invoices for other customers." });
+      }
+    }
+
+    const [rows] = await db.execute(
+      `SELECT i.*, p.payment_method, p.transaction_reference, p.payment_status
+       FROM invoices i
+       JOIN payments p ON p.payment_id = i.payment_id
+       WHERE i.booking_id = ?`,
+      [Number(req.params.bookingId)]
+    );
+    return res.status(200).json({ success: true, data: rows });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: "Failed to fetch invoices." });
+  }
+});
+
+// -------------------------------------------------------------
+// MODULE 3.5: PARKING MANAGEMENT & PRICING
+// -------------------------------------------------------------
+
+router.get("/pricing", async (req, res) => {
+  try {
+    const [rows] = await db.execute(
+      `SELECT p.*, l.location_name 
+       FROM pricing_policies p 
+       JOIN parking_locations l ON l.location_id = p.location_id`
+    );
+    return res.status(200).json({ success: true, data: rows });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: "Failed to fetch pricing." });
+  }
+});
+
+router.post("/pricing", requireRole(["BRANCH_MANAGER", "SUPER_ADMINISTRATOR"]), async (req, res) => {
+  const { location_id, vehicle_type, hourly_rate, daily_rate } = req.body;
+  try {
+    await db.execute(
+      `INSERT INTO pricing_policies (location_id, vehicle_type, hourly_rate, daily_rate, effective_from)
+       VALUES (?, ?, ?, ?, CURDATE())`,
+      [location_id || 1, vehicle_type || 'FOUR_WHEELER', hourly_rate || 20.00, daily_rate || 150.00]
+    );
+    return res.status(201).json({ success: true, message: "Pricing policy configured successfully." });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: "Failed to configure pricing." });
+  }
+});
+
+// -------------------------------------------------------------
+// MODULE 3.6: VIRTUAL QUEUE MANAGEMENT
+// -------------------------------------------------------------
+
+router.get("/queue", async (req, res) => {
+  try {
+    const [rows] = await db.execute(
+      `SELECT q.*, u.full_name, u.email, c.user_id
+       FROM virtual_queues q 
+       JOIN customers c ON c.customer_id = q.customer_id
+       JOIN users u ON u.user_id = c.user_id
+       WHERE q.queue_status = 'WAITING'
+       ORDER BY q.queue_number ASC`
+    );
+    return res.status(200).json({ success: true, data: rows });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: "Failed to fetch queue." });
+  }
+});
+
+router.post("/queue/join", async (req, res) => {
+  try {
+    // 1. Verify if facility is completely filled (100% capacity)
+    const [slots] = await db.execute(
+      "SELECT slot_id, slot_status, occupied FROM parking_slots WHERE is_active = TRUE"
+    );
+
+    // Check which slots have active or confirmed reservations
+    const [activeBookings] = await db.execute(
+      "SELECT DISTINCT slot_id FROM bookings WHERE booking_status IN ('ACTIVE', 'CONFIRMED')"
+    );
+    const occupiedSlotIds = new Set(activeBookings.map((b) => b.slot_id));
+
+    // A slot is vacant if it is NOT occupied in parking_slots AND has NO active/confirmed booking
+    const vacantSlots = slots.filter(
+      (s) => !s.occupied && s.slot_status === "AVAILABLE" && !occupiedSlotIds.has(s.slot_id)
+    );
+
+    if (vacantSlots.length > 0) {
+      return res.status(400).json({
+        success: false,
+        message: `Cannot join virtual queue: There are still ${vacantSlots.length} available parking slot(s). Virtual queue is only allowed when every slot is filled.`,
+        vacant_slots_count: vacantSlots.length
+      });
+    }
+
+    const [customers] = await db.execute("SELECT customer_id FROM customers WHERE user_id = ?", [req.user.user_id]);
+    const customerId = customers[0]?.customer_id || 1;
+
+    // Check if customer is already in waiting queue
+    const [existingQ] = await db.execute(
+      "SELECT queue_id, queue_number FROM virtual_queues WHERE customer_id = ? AND queue_status = 'WAITING'",
+      [customerId]
+    );
+    if (existingQ.length > 0) {
+      return res.status(400).json({
+        success: false,
+        message: `You are already waiting in the virtual queue at Position #${existingQ[0].queue_number}.`
+      });
+    }
+
+    const [maxQ] = await db.execute("SELECT MAX(queue_number) AS max_num FROM virtual_queues WHERE queue_status = 'WAITING'");
+    const nextNum = (maxQ[0]?.max_num || 0) + 1;
+
+    const [result] = await db.execute(
+      `INSERT INTO virtual_queues (customer_id, location_id, queue_number, queue_status)
+       VALUES (?, 1, ?, 'WAITING')`,
+      [customerId, nextNum]
+    );
+
+    return res.status(201).json({
+      success: true,
+      message: `Facility is 100% full. Joined virtual queue at Position #${nextNum}. You will be alerted when a slot opens.`,
+      queue_id: result.insertId,
+      queue_position: nextNum
+    });
+  } catch (err) {
+    console.error("Queue join error:", err.message);
+    return res.status(500).json({ success: false, message: "Failed to join queue." });
+  }
+});
+
+// Remove / Dequeue member from virtual queue
+router.delete("/queue/:queueId", async (req, res) => {
+  const queueId = Number(req.params.queueId);
+  try {
+    const [queueRows] = await db.execute(
+      `SELECT q.*, c.user_id 
+       FROM virtual_queues q 
+       JOIN customers c ON c.customer_id = q.customer_id 
+       WHERE q.queue_id = ?`,
+      [queueId]
+    );
+
+    if (queueRows.length === 0) {
+      return res.status(404).json({ success: false, message: "Queue entry not found." });
+    }
+
+    const entry = queueRows[0];
+
+    // Role-based authorization:
+    // CUSTOMER: Can only cancel/remove their OWN waiting queue entry!
+    // Staff (PARKING_OPERATOR, BRANCH_MANAGER, SUPER_ADMINISTRATOR): Can remove ANY member!
+    if (req.user.role === "CUSTOMER" && entry.user_id !== req.user.user_id) {
+      return res.status(403).json({
+        success: false,
+        message: "Forbidden: You do not have permission to remove other members from the virtual queue."
+      });
+    }
+
+    await db.execute(
+      "UPDATE virtual_queues SET queue_status = 'REMOVED' WHERE queue_id = ?",
+      [queueId]
+    );
+
+    return res.status(200).json({
+      success: true,
+      message: req.user.role === "CUSTOMER"
+        ? "You have left the virtual waiting queue."
+        : `Queue member #${entry.queue_number} has been removed from the queue.`
+    });
+  } catch (err) {
+    console.error("Queue removal error:", err.message);
+    return res.status(500).json({ success: false, message: "Failed to remove member from queue." });
+  }
+});
+
+// -------------------------------------------------------------
+// MODULE 3.7: DIGITAL VALET MANAGEMENT
+// -------------------------------------------------------------
+
+router.get("/valet", async (req, res) => {
+  try {
+    let query = `SELECT v.*, b.slot_id, veh.vehicle_number, veh.model
+       FROM valet_tasks v
+       JOIN bookings b ON b.booking_id = v.booking_id
+       JOIN vehicles veh ON veh.vehicle_id = v.vehicle_id`;
+    const params = [];
+
+    // Role access control: Customers can ONLY see their own vehicles
+    if (req.user.role === "CUSTOMER") {
+      const [customers] = await db.execute("SELECT customer_id FROM customers WHERE user_id = ?", [req.user.user_id]);
+      const customerId = customers[0]?.customer_id || 0;
+      query += ` WHERE b.customer_id = ?`;
+      params.push(customerId);
+    }
+
+    query += ` ORDER BY v.valet_id DESC`;
+    const [rows] = await db.execute(query, params);
+    return res.status(200).json({ success: true, data: rows });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: "Failed to fetch valet tasks." });
+  }
+});
+
+router.post("/valet/request-retrieval", async (req, res) => {
+  const { valet_id } = req.body;
+  if (!valet_id) {
+    return res.status(400).json({ success: false, message: "Valet task ID is required." });
+  }
+  try {
+    if (req.user.role === "CUSTOMER") {
+      const [customers] = await db.execute("SELECT customer_id FROM customers WHERE user_id = ?", [req.user.user_id]);
+      const customerId = customers[0]?.customer_id || 0;
+      const [taskRows] = await db.execute(
+        `SELECT v.valet_id 
+         FROM valet_tasks v
+         JOIN bookings b ON b.booking_id = v.booking_id
+         WHERE v.valet_id = ? AND b.customer_id = ?`,
+        [Number(valet_id), customerId]
+      );
+      if (taskRows.length === 0) {
+        return res.status(403).json({ success: false, message: "Forbidden: You cannot request retrieval for another customer's vehicle." });
+      }
+    }
+
+    await db.execute(
+      `UPDATE valet_tasks 
+       SET retrieval_requested = TRUE, requested_at = NOW(), valet_status = 'RETRIEVAL_REQUESTED'
+       WHERE valet_id = ?`,
+      [Number(valet_id)]
+    );
+    return res.status(200).json({ success: true, message: "Vehicle retrieval requested. Valet dispatched." });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: "Failed to request retrieval." });
+  }
+});
+
+// -------------------------------------------------------------
+// MODULE 3.8: VIOLATION & PENALTY MANAGEMENT
+// -------------------------------------------------------------
+
+router.get("/violations", async (req, res) => {
+  try {
+    let query = `SELECT viol.* FROM violations viol`;
+    const params = [];
+
+    // Role access control: Customers can ONLY view violations for their own vehicles or bookings
+    if (req.user.role === "CUSTOMER") {
+      const [customers] = await db.execute("SELECT customer_id FROM customers WHERE user_id = ?", [req.user.user_id]);
+      const customerId = customers[0]?.customer_id || 0;
+      query += ` LEFT JOIN vehicles veh ON veh.vehicle_number = viol.vehicle_number
+                 LEFT JOIN bookings b ON b.booking_id = viol.booking_id
+                 WHERE veh.customer_id = ? OR b.customer_id = ?`;
+      params.push(customerId, customerId);
+    }
+
+    query += ` ORDER BY viol.violation_id DESC`;
+    const [rows] = await db.execute(query, params);
+    return res.status(200).json({ success: true, data: rows });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: "Failed to fetch violations." });
+  }
+});
+
+router.post("/violations/issue", requireRole(["PARKING_OPERATOR", "BRANCH_MANAGER", "SUPER_ADMINISTRATOR"]), async (req, res) => {
+  const { vehicle_number, violation_type, fine_amount, booking_id } = req.body;
+  try {
+    const [result] = await db.execute(
+      `INSERT INTO violations (booking_id, vehicle_number, violation_type, fine_amount, penalty_status)
+       VALUES (?, ?, ?, ?, 'ISSUED')`,
+      [booking_id || null, vehicle_number || 'UNKNOWN', violation_type || 'OVERSTAY', fine_amount || 50.00]
+    );
+    return res.status(201).json({ success: true, message: "Penalty notice recorded.", violation_id: result.insertId });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: "Failed to record violation." });
+  }
+});
+
+router.post("/violations/dispute", async (req, res) => {
+  const { violation_id, dispute_reason } = req.body;
+  if (!violation_id || !dispute_reason) {
+    return res.status(400).json({ success: false, message: "Violation ID and dispute reason are required." });
+  }
+  try {
+    if (req.user.role === "CUSTOMER") {
+      const [customers] = await db.execute("SELECT customer_id FROM customers WHERE user_id = ?", [req.user.user_id]);
+      const customerId = customers[0]?.customer_id || 0;
+      const [violRows] = await db.execute(
+        `SELECT viol.violation_id 
+         FROM violations viol
+         LEFT JOIN vehicles veh ON veh.vehicle_number = viol.vehicle_number
+         LEFT JOIN bookings b ON b.booking_id = viol.booking_id
+         WHERE viol.violation_id = ? AND (veh.customer_id = ? OR b.customer_id = ?)`,
+        [Number(violation_id), customerId, customerId]
+      );
+      if (violRows.length === 0) {
+        return res.status(403).json({ success: false, message: "Forbidden: You cannot dispute another customer's violation notice." });
+      }
+    }
+
+    await db.execute(
+      `UPDATE violations SET penalty_status = 'DISPUTED', dispute_reason = ? WHERE violation_id = ?`,
+      [dispute_reason, Number(violation_id)]
+    );
+    return res.status(200).json({ success: true, message: "Dispute submitted for manager review." });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: "Failed to submit dispute." });
+  }
+});
+
+// -------------------------------------------------------------
+// MODULE 3.9: REPORTS & ANALYTICS
+// -------------------------------------------------------------
+
+router.get("/analytics/summary", requireRole(["BRANCH_MANAGER", "SUPER_ADMINISTRATOR"]), async (req, res) => {
+  try {
+    const [slotStats] = await db.execute(
+      `SELECT 
+         COUNT(*) AS total_slots,
+         SUM(CASE WHEN occupied = TRUE OR slot_status = 'OCCUPIED' THEN 1 ELSE 0 END) AS occupied_slots
+       FROM parking_slots`
+    );
+
+    const [revStats] = await db.execute(
+      `SELECT 
+         IFNULL(SUM(total_amount), 0) AS total_revenue,
+         COUNT(*) AS total_invoices
+       FROM invoices`
+    );
+
+    const [bkStats] = await db.execute(
+      `SELECT 
+         COUNT(*) AS total_reservations,
+         SUM(CASE WHEN booking_status = 'ACTIVE' THEN 1 ELSE 0 END) AS active_reservations,
+         SUM(CASE WHEN booking_status = 'COMPLETED' THEN 1 ELSE 0 END) AS completed_reservations
+       FROM bookings`
+    );
+
+    const totalSlots = slotStats[0]?.total_slots || 12;
+    const occupiedSlots = slotStats[0]?.occupied_slots || 0;
+    const occupancyRate = totalSlots > 0 ? ((occupiedSlots / totalSlots) * 100).toFixed(1) : 0;
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        total_slots: totalSlots,
+        occupied_slots: occupiedSlots,
+        available_slots: totalSlots - occupiedSlots,
+        occupancy_rate: `${occupancyRate}%`,
+        total_revenue: revStats[0]?.total_revenue || 0,
+        total_invoices: revStats[0]?.total_invoices || 0,
+        reservations: bkStats[0] || {}
+      }
+    });
+  } catch (err) {
+    console.error("Analytics error:", err.message);
+    return res.status(500).json({ success: false, message: "Failed to generate analytics summary." });
+  }
+});
+
+module.exports = router;

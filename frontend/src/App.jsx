@@ -214,6 +214,15 @@ function IconEyeOff({ className = "icon" }) {
   );
 }
 
+function IconMail({ className = "icon" }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z" />
+      <polyline points="22,6 12,13 2,6" />
+    </svg>
+  );
+}
+
 function getDefaultBookingForm() {
   const tomorrow = new Date();
   tomorrow.setDate(tomorrow.getDate() + 1);
@@ -594,6 +603,51 @@ function AuthScreen({
   );
 }
 
+// URL Route Synchronization & Comprehensive Route Mapping
+const ROUTE_ALIASES = {
+  dashboard: "dashboard",
+  bookings: "dashboard",
+  reservations: "dashboard",
+  parking: "dashboard",
+  map: "dashboard",
+  audit: "dashboard",
+  logs: "dashboard",
+  gate: "gate",
+  scanner: "gate",
+  queue: "queue",
+  "virtual-queue": "queue",
+  valet: "valet",
+  violations: "violations",
+  compliance: "violations",
+  disputes: "violations",
+  analytics: "analytics",
+  reports: "analytics",
+};
+
+function resolveRoute() {
+  let path = window.location.pathname.replace(/^\//, "").trim();
+  if (!path && window.location.hash) {
+    path = window.location.hash.replace(/^#\/?/, "").trim();
+  }
+  const clean = path.toLowerCase();
+
+  // Dedicated Auth Routes
+  if (clean === "login" || clean === "register") {
+    return { tab: "auth", authMode: clean, raw: clean };
+  }
+
+  // Default root / or /dashboard
+  if (!clean || clean === "dashboard") {
+    return { tab: "dashboard", authMode: "login", raw: "dashboard" };
+  }
+
+  if (ROUTE_ALIASES[clean]) {
+    return { tab: ROUTE_ALIASES[clean], authMode: "login", raw: clean };
+  }
+
+  return { tab: "404", authMode: "login", raw: path };
+}
+
 function App() {
   const [token, setToken] = useState(() => localStorage.getItem("cpos_token") || null);
   const [user, setUser] = useState(() => {
@@ -605,7 +659,6 @@ function App() {
     }
   });
 
-  const [mode, setMode] = useState("login");
   const [authForm, setAuthForm] = useState({
     full_name: "",
     email: "",
@@ -649,21 +702,47 @@ function App() {
     }
   }, [user]);
 
-  // Prevent browser back arrow from exiting the app
+  const [activeTab, setActiveTab] = useState(() => resolveRoute().tab);
+  const [currentRoutePath, setCurrentRoutePath] = useState(() => resolveRoute().raw);
+  const [mode, setMode] = useState(() => resolveRoute().authMode);
+  const [emailCopied, setEmailCopied] = useState(false);
+
+  function handleSetMode(nextMode) {
+    setMode(nextMode);
+    setError("");
+    setNotice("");
+    window.history.pushState({}, "", `/${nextMode}`);
+  }
+
+  function navigateToTab(tab) {
+    setActiveTab(tab);
+    setCurrentRoutePath(tab);
+    const targetUrl = tab === "dashboard" ? "/" : `/${tab}`;
+    window.history.pushState({}, "", targetUrl);
+  }
+
+  // Listen to browser URL route changes (Back / Forward buttons, URL typing)
   useEffect(() => {
-    // Push state so back button is trapped inside the application
-    window.history.pushState({ cpos: true }, "", window.location.href);
-
-    const handlePopState = () => {
-      // Re-push state so user stays in CPOS
-      window.history.pushState({ cpos: true }, "", window.location.href);
+    const handleRouteChange = () => {
+      const route = resolveRoute();
+      setActiveTab(route.tab);
+      setCurrentRoutePath(route.raw);
+      setMode(route.authMode);
     };
 
-    window.addEventListener("popstate", handlePopState);
+    window.addEventListener("popstate", handleRouteChange);
+    window.addEventListener("hashchange", handleRouteChange);
+
+    // If logged out and on root '/', update URL to match auth mode (/login or /register)
+    if (!token && (window.location.pathname === "/" || window.location.pathname === "")) {
+      window.history.replaceState({}, "", "/login");
+    }
+
     return () => {
-      window.removeEventListener("popstate", handlePopState);
+      window.removeEventListener("popstate", handleRouteChange);
+      window.removeEventListener("hashchange", handleRouteChange);
     };
-  }, []);
+  }, [token]);
 
   const [auditLogs, setAuditLogs] = useState([]);
   const [auditPagination, setAuditPagination] = useState(null);
@@ -674,6 +753,15 @@ function App() {
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState("ALL");
   const [selectedFloor, setSelectedFloor] = useState("L1");
+  const [modalQrData, setModalQrData] = useState(null);
+  const [modalInvoiceData, setModalInvoiceData] = useState(null);
+  const [queueData, setQueueData] = useState([]);
+  const [valetData, setValetData] = useState([]);
+  const [violationsData, setViolationsData] = useState([]);
+  const [analyticsData, setAnalyticsData] = useState(null);
+  const [operatorOtpInput, setOperatorOtpInput] = useState("");
+  const [operatorBookingInput, setOperatorBookingInput] = useState("");
+  const [violationForm, setViolationForm] = useState({ vehicle_number: "", violation_type: "OVERSTAY", fine_amount: 50 });
 
   // Production Parking Layout: 12 defined slots per floor with types & zones
   const PARKING_LOT_SLOTS = [
@@ -694,6 +782,14 @@ function App() {
   const role = normalizeRole(user?.role);
   const isSuperAdmin = role === "SUPER_ADMINISTRATOR";
   const isStaff = ["PARKING_OPERATOR", "BRANCH_MANAGER", "SUPER_ADMINISTRATOR"].includes(role);
+
+  const vacantSlotsCount = PARKING_LOT_SLOTS.filter((slot) => {
+    const isBooked = bookings.some(
+      (b) => Number(b.slot_id) === slot.id && ["ACTIVE", "CONFIRMED"].includes(b.booking_status)
+    );
+    return !isBooked;
+  }).length;
+  const isFacilityFull = vacantSlotsCount === 0;
 
   useEffect(() => {
     if (!token) return undefined;
@@ -783,7 +879,7 @@ function App() {
           driving_license_number: authForm.driving_license_number.trim(),
         });
 
-        setMode("login");
+        handleSetMode("login");
         setNotice("Registration successful! Please sign in with your credentials.");
       } else {
         const result = await api.login({
@@ -795,6 +891,8 @@ function App() {
         setUser(result.user);
         setPage(1);
         setNotice("");
+        const destination = (currentRoutePath && ROUTE_ALIASES[currentRoutePath]) ? ROUTE_ALIASES[currentRoutePath] : "dashboard";
+        navigateToTab(destination);
       }
     } catch (requestError) {
       setError(requestError.message);
@@ -811,7 +909,7 @@ function App() {
     setPage(1);
     setError("");
     setNotice("");
-    setMode("login");
+    handleSetMode("login");
     setAuthForm({
       full_name: "",
       email: "",
@@ -911,6 +1009,7 @@ function App() {
       setUser(result.user);
       setPage(1);
       setNotice("Signed in with Google successfully.");
+      navigateToTab("dashboard");
     } catch (requestError) {
       setError(requestError.message);
     } finally {
@@ -918,15 +1017,315 @@ function App() {
     }
   }
 
+  // --- Multi-Module Handlers ---
+  async function openQrModal(bookingId) {
+    try {
+      const res = await api.getQrCode(token, bookingId);
+      setModalQrData(res.data);
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
+  async function openInvoiceModal(bookingId) {
+    try {
+      const res = await api.getInvoices(token, bookingId);
+      if (res.data && res.data.length > 0) {
+        setModalInvoiceData(res.data[0]);
+      } else {
+        // Auto-generate invoice if none exists
+        const payRes = await api.processPayment(token, {
+          booking_id: bookingId,
+          payment_method: "CARD",
+          amount: 25.00
+        });
+        const invRes = await api.getInvoices(token, bookingId);
+        setModalInvoiceData(invRes.data[0] || { invoice_number: payRes.data.invoice_number, total_amount: payRes.data.total_amount });
+      }
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
+  async function handleOperatorEntry(e) {
+    e.preventDefault();
+    try {
+      const res = await api.verifyEntry(token, {
+        otp: operatorOtpInput.trim() || undefined,
+        booking_id: operatorBookingInput ? Number(operatorBookingInput) : undefined
+      });
+      setNotice(res.message);
+      setOperatorOtpInput("");
+      setOperatorBookingInput("");
+      setRefreshKey((v) => v + 1);
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
+  async function handleOperatorExit(bookingId) {
+    try {
+      const res = await api.verifyExit(token, { booking_id: bookingId });
+      setNotice(res.message);
+      setRefreshKey((v) => v + 1);
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
+  async function loadOperationsData() {
+    try {
+      if (activeTab === "queue") {
+        const res = await api.getQueue(token);
+        setQueueData(res.data || []);
+      } else if (activeTab === "valet") {
+        const res = await api.getValetTasks(token);
+        setValetData(res.data || []);
+      } else if (activeTab === "violations") {
+        const res = await api.getViolations(token);
+        setViolationsData(res.data || []);
+      } else if (activeTab === "analytics") {
+        const res = await api.getAnalytics(token);
+        setAnalyticsData(res.data || null);
+      }
+    } catch (err) {
+      console.warn("Operations load warning:", err.message);
+    }
+  }
+
+  useEffect(() => {
+    if (!token || activeTab === "dashboard") return undefined;
+
+    let cancelled = false;
+
+    async function fetchActiveTabData() {
+      try {
+        if (activeTab === "queue") {
+          const res = await api.getQueue(token);
+          if (!cancelled) setQueueData(res.data || []);
+        } else if (activeTab === "valet") {
+          const res = await api.getValetTasks(token);
+          if (!cancelled) setValetData(res.data || []);
+        } else if (activeTab === "violations") {
+          const res = await api.getViolations(token);
+          if (!cancelled) setViolationsData(res.data || []);
+        } else if (activeTab === "analytics") {
+          const res = await api.getAnalytics(token);
+          if (!cancelled) setAnalyticsData(res.data || null);
+        }
+      } catch (err) {
+        if (!cancelled) console.warn("Operations load warning:", err.message);
+      }
+    }
+
+    fetchActiveTabData();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTab, token, refreshKey]);
+
+  async function handleJoinQueue() {
+    if (!isFacilityFull) {
+      setError(
+        `Cannot join virtual queue: There are still ${vacantSlotsCount} available parking slot(s). Virtual queue is only allowed when every slot is filled.`
+      );
+      return;
+    }
+    try {
+      const res = await api.joinQueue(token);
+      setNotice(res.message);
+      loadOperationsData();
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
+  async function handleRemoveQueueMember(queueId) {
+    try {
+      const res = await api.removeQueueMember(token, queueId);
+      setNotice(res.message);
+      loadOperationsData();
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
+  async function handleValetRetrieval(valetId) {
+    try {
+      const res = await api.requestValetRetrieval(token, valetId);
+      setNotice(res.message);
+      loadOperationsData();
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
+  async function handleIssueViolation(e) {
+    e.preventDefault();
+    try {
+      const res = await api.issueViolation(token, violationForm);
+      setNotice(res.message);
+      setViolationForm({ vehicle_number: "", violation_type: "OVERSTAY", fine_amount: 50 });
+      loadOperationsData();
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
+  async function handleDisputeViolation(violationId) {
+    const reason = prompt("Enter reason for disputing this penalty violation:");
+    if (!reason) return;
+    try {
+      const res = await api.disputeViolation(token, { violation_id: violationId, dispute_reason: reason });
+      setNotice(res.message);
+      loadOperationsData();
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
+  if (activeTab === "404") {
+    return (
+      <div className="notfound-overview-page">
+        <header className="topbar">
+          <div className="topbar-container">
+            <div className="brand">
+              <div className="brand-icon-wrap">
+                <IconParking className="brand-icon" />
+              </div>
+              <div className="brand-text">
+                <span className="brand-title">CPOS</span>
+                <span className="brand-tag">Operations Portal</span>
+              </div>
+            </div>
+            <div className="notfound-badge-chip">
+              <span className="notfound-pulse-dot"></span>
+              <span>Facility Sector: 404 Unresolved</span>
+            </div>
+          </div>
+        </header>
+
+        <main className="notfound-overview-main">
+          <section className="notfound-hero-section">
+            <div className="notfound-pill">
+              <span className="notfound-pulse-dot"></span>
+              <span>HTTP 404 • UNRESOLVED SECTOR</span>
+            </div>
+
+            <div className="notfound-display-number">404</div>
+
+            <h1 className="notfound-headline-text">Facility Sector Not Found</h1>
+
+            <p className="notfound-description-text">
+              The operational coordinates for{" "}
+              <code className="notfound-route-chip">/{currentRoutePath}</code>{" "}
+              could not be located in the CPOS facility directory. This sector does not exist, was relocated, or is restricted.
+            </p>
+
+            <div className="notfound-actions-group">
+              <button
+                className="notfound-primary-button"
+                onClick={() => {
+                  if (token && user) {
+                    navigateToTab("dashboard");
+                  } else {
+                    handleSetMode("login");
+                    setActiveTab("auth");
+                  }
+                }}
+              >
+                {token && user ? "← Return to Core Dashboard" : "← Return to Sign In"}
+              </button>
+            </div>
+          </section>
+
+          <section className="notfound-report-section">
+            <div className="notfound-report-card">
+              <div className="notfound-report-badge">
+                <IconMail className="icon" />
+                <span>OPERATIONS SUPPORT & INCIDENT REPORT</span>
+              </div>
+
+              <h2 className="notfound-report-title">Report Unresolved Sector or Broken Route</h2>
+
+              <p className="notfound-report-desc">
+                If you encountered a broken link, missing page, or sector that should be accessible, report this incident directly to our operations administrator:
+              </p>
+
+              <div className="notfound-email-display-box">
+                <div className="notfound-email-left">
+                  <span className="notfound-email-label">DIRECT SUPPORT CONTACT</span>
+                  <a
+                    href={`mailto:dawoodabdulbasith24bcs054@gmail.com?subject=${encodeURIComponent(`CPOS Incident: 404 Route Unresolved (/${currentRoutePath})`)}&body=${encodeURIComponent(`Hello Operations Administrator,\n\nI encountered an unresolved 404 error in the CPOS application:\n\n- Unresolved Route: /${currentRoutePath}\n- Full URL: ${window.location.href}\n- Incident Code: ERR_404_SECTOR_UNRESOLVED\n- Client Timestamp: ${new Date().toLocaleString()}\n\nPlease investigate this route or restore access.\n\nThank you.`)}`}
+                    className="notfound-email-address"
+                  >
+                    dawoodabdulbasith24bcs054@gmail.com
+                  </a>
+                </div>
+                <div className="notfound-email-actions">
+                  <a
+                    href={`mailto:dawoodabdulbasith24bcs054@gmail.com?subject=${encodeURIComponent(`CPOS Incident: 404 Route Unresolved (/${currentRoutePath})`)}&body=${encodeURIComponent(`Hello Operations Administrator,\n\nI encountered an unresolved 404 error in the CPOS application:\n\n- Unresolved Route: /${currentRoutePath}\n- Full URL: ${window.location.href}\n- Incident Code: ERR_404_SECTOR_UNRESOLVED\n- Client Timestamp: ${new Date().toLocaleString()}\n\nPlease investigate this route or restore access.\n\nThank you.`)}`}
+                    className="notfound-primary-button notfound-email-btn"
+                  >
+                    <IconMail className="icon" />
+                    <span>Report via Email</span>
+                  </a>
+                  <button
+                    type="button"
+                    className="notfound-secondary-button"
+                    onClick={() => {
+                      navigator.clipboard.writeText("dawoodabdulbasith24bcs054@gmail.com");
+                      setEmailCopied(true);
+                      setTimeout(() => setEmailCopied(false), 2500);
+                    }}
+                  >
+                    {emailCopied ? "✓ Email Copied!" : "Copy Email"}
+                  </button>
+                </div>
+              </div>
+
+              <div className="notfound-telemetry-strip">
+                <div className="notfound-telemetry-item">
+                  <span className="notfound-telemetry-label">INCIDENT CODE</span>
+                  <span className="notfound-telemetry-value">ERR_404_SECTOR_UNRESOLVED</span>
+                </div>
+                <div className="notfound-telemetry-item">
+                  <span className="notfound-telemetry-label">REQUESTED PATH</span>
+                  <span className="notfound-telemetry-value">/{currentRoutePath}</span>
+                </div>
+                <div className="notfound-telemetry-item">
+                  <span className="notfound-telemetry-label">SUPPORT INBOX</span>
+                  <span className="notfound-telemetry-value">dawoodabdulbasith24bcs054@gmail.com</span>
+                </div>
+              </div>
+            </div>
+          </section>
+        </main>
+
+        <footer className="dashboard-footer" style={{ padding: "20px 24px", maxWidth: "1440px", margin: "0 auto", width: "100%" }}>
+          <div className="footer-content">
+            <div>
+              <span>CPOS — Commercial Parking Operations System</span>
+              <span className="footer-dot"> • </span>
+              <span>HTTP Status 404 Route Unresolved</span>
+            </div>
+            <div className="footer-right">
+              <span>Enterprise Operations v1.0</span>
+              <span className="footer-dot"> • </span>
+              <span>All Systems Operational</span>
+            </div>
+          </div>
+        </footer>
+      </div>
+    );
+  }
+
   if (!token || !user) {
     return (
       <AuthScreen
         mode={mode}
-        setMode={(nextMode) => {
-          setMode(nextMode);
-          setError("");
-          setNotice("");
-        }}
+        setMode={handleSetMode}
         form={authForm}
         setForm={setAuthForm}
         onSubmit={handleAuthSubmit}
@@ -1021,6 +1420,50 @@ function App() {
             </div>
           </section>
 
+          {/* SRS Module Navigation Bar */}
+          <nav className="srs-module-nav">
+            <button
+              className={`module-tab-btn ${activeTab === "dashboard" ? "active" : ""}`}
+              onClick={() => navigateToTab("dashboard")}
+            >
+              📊 Core Dashboard
+            </button>
+            {isStaff && (
+              <button
+                className={`module-tab-btn ${activeTab === "gate" ? "active" : ""}`}
+                onClick={() => navigateToTab("gate")}
+              >
+                🎟️ Gate Scanner (FR-3.3)
+              </button>
+            )}
+            <button
+              className={`module-tab-btn ${activeTab === "queue" ? "active" : ""}`}
+              onClick={() => navigateToTab("queue")}
+            >
+              ⏳ Virtual Queue (FR-3.6)
+            </button>
+            <button
+              className={`module-tab-btn ${activeTab === "valet" ? "active" : ""}`}
+              onClick={() => navigateToTab("valet")}
+            >
+              🔑 Valet Parking (FR-3.7)
+            </button>
+            <button
+              className={`module-tab-btn ${activeTab === "violations" ? "active" : ""}`}
+              onClick={() => navigateToTab("violations")}
+            >
+              ⚠️ Violations (FR-3.8)
+            </button>
+            {(role === "BRANCH_MANAGER" || isSuperAdmin) && (
+              <button
+                className={`module-tab-btn ${activeTab === "analytics" ? "active" : ""}`}
+                onClick={() => navigateToTab("analytics")}
+              >
+                📈 Analytics & Reports (FR-3.9)
+              </button>
+            )}
+          </nav>
+
           {/* Alert Banners */}
           {error && (
             <div className="alert error" role="alert">
@@ -1044,8 +1487,10 @@ function App() {
             </div>
           )}
 
-          {/* Metric Summary Cards */}
-          <section className="summary-grid">
+          {/* Core Dashboard View (Summary Cards, Floor Map, Reservations Table & Booking Form) */}
+          {activeTab === "dashboard" && (
+            <>
+              <section className="summary-grid">
             <article className="summary-card">
               <div className="summary-card-header">
                 <span className="summary-label">Total Reservations</span>
@@ -1333,37 +1778,47 @@ function App() {
                               </span>
                             </td>
                             <td className="cell-actions">
-                              {options.length > 0 ? (
-                                <div className="action-buttons">
-                                  {options.map((status) => {
-                                    const isCancel = status === "CANCELLED";
-                                    const isConfirm = status === "CONFIRMED";
-                                    const isActive = status === "ACTIVE";
+                              <div className="action-buttons">
+                                <button
+                                  className="small-button btn-confirm"
+                                  onClick={() => openQrModal(booking.booking_id)}
+                                  title="View Entrance QR Code & OTP Pass"
+                                >
+                                  🎟️ QR Pass
+                                </button>
+                                <button
+                                  className="small-button"
+                                  onClick={() => openInvoiceModal(booking.booking_id)}
+                                  title="View Digital Invoice"
+                                >
+                                  📄 Invoice
+                                </button>
+                                {options.map((status) => {
+                                  const isCancel = status === "CANCELLED";
+                                  const isConfirm = status === "CONFIRMED";
+                                  const isActive = status === "ACTIVE";
 
-                                    let btnClass = "small-button";
-                                    if (isCancel) btnClass += " btn-cancel";
-                                    else if (isConfirm) btnClass += " btn-confirm";
-                                    else if (isActive) btnClass += " btn-active";
+                                  let btnClass = "small-button";
+                                  if (isCancel) btnClass += " btn-cancel";
+                                  else if (isConfirm) btnClass += " btn-confirm";
+                                  else if (isActive) btnClass += " btn-active";
 
-                                    return (
-                                      <button
-                                        key={status}
-                                        className={btnClass}
-                                        onClick={() =>
-                                          handleStatusUpdate(
-                                            booking.booking_id,
-                                            status
-                                          )
-                                        }
-                                      >
-                                        {isCancel ? "Cancel" : status}
-                                      </button>
-                                    );
-                                  })}
-                                </div>
-                              ) : (
-                                <span className="cell-muted-text">None</span>
-                              )}
+                                  return (
+                                    <button
+                                      key={status}
+                                      className={btnClass}
+                                      onClick={() =>
+                                        handleStatusUpdate(
+                                          booking.booking_id,
+                                          status
+                                        )
+                                      }
+                                    >
+                                      {isCancel ? "Cancel" : status}
+                                    </button>
+                                  );
+                                })}
+                              </div>
                             </td>
                           </tr>
                         );
@@ -1545,8 +2000,8 @@ function App() {
             </article>
           </section>
 
-          {/* Super Administrator Audit Log Panel */}
-          {isSuperAdmin && (
+          {/* SUPER ADMINISTRATOR AUDIT LOG PANEL */}
+          {activeTab === "dashboard" && isSuperAdmin && (
             <section className="panel audit-panel">
               <div className="panel-header">
                 <div className="panel-title-group">
@@ -1627,6 +2082,470 @@ function App() {
                 </div>
               )}
             </section>
+          )}
+            </>
+          )}
+
+          {/* MODULE 3.3: OPERATOR GATE SCANNER VIEW */}
+          {activeTab === "gate" && isStaff && (
+            <section className="panel operations-panel">
+              <div className="panel-header">
+                <div className="panel-title-group">
+                  <span className="panel-badge highlight">FR-3.3 GATE & ENTRY VERIFICATION</span>
+                  <h2>Operator Gate Terminal</h2>
+                  <p className="panel-subtitle">Verify QR Code / 6-digit OTP to authorize vehicle entry and release slots upon exit.</p>
+                </div>
+              </div>
+
+              <div className="gate-scanner-grid">
+                <div className="scanner-form-card">
+                  <h3>⚡ Instant Check-in Verification</h3>
+                  <p className="field-hint">Enter the 6-digit OTP presented by the driver or their Booking ID:</p>
+                  <form onSubmit={handleOperatorEntry} className="gate-entry-form">
+                    <div className="form-group">
+                      <label>Driver 6-Digit OTP:</label>
+                      <input
+                        type="text"
+                        placeholder="e.g. 583921"
+                        maxLength={6}
+                        value={operatorOtpInput}
+                        onChange={(e) => setOperatorOtpInput(e.target.value)}
+                      />
+                    </div>
+                    <div className="form-group">
+                      <label>Or Booking ID #:</label>
+                      <input
+                        type="number"
+                        placeholder="e.g. 2"
+                        value={operatorBookingInput}
+                        onChange={(e) => setOperatorBookingInput(e.target.value)}
+                      />
+                    </div>
+                    <button type="submit" className="primary-button">
+                      Verify & Check-in (Mark Occupied)
+                    </button>
+                  </form>
+                </div>
+
+                <div className="scanner-active-sessions">
+                  <h3>Active Vehicles in Lot (One-Click Exit)</h3>
+                  {bookings.filter(b => b.booking_status === "ACTIVE").length === 0 ? (
+                    <div className="empty-state-mini">
+                      <p>No vehicles currently marked as ACTIVE in this lot.</p>
+                    </div>
+                  ) : (
+                    <div className="active-exit-list">
+                      {bookings.filter(b => b.booking_status === "ACTIVE").map(b => (
+                        <div key={b.booking_id} className="active-exit-item">
+                          <div>
+                            <strong>Booking #{b.booking_id}</strong> · <span className="slot-badge">Slot {b.slot_id}</span>
+                            <div className="text-muted text-xs">Entered: {formatDate(b.expected_entry_time)}</div>
+                          </div>
+                          <button
+                            className="small-button btn-confirm"
+                            onClick={() => handleOperatorExit(b.booking_id)}
+                          >
+                            Mark Vehicle Exit (Free Slot)
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </section>
+          )}
+
+          {/* MODULE 3.6: VIRTUAL QUEUE MANAGEMENT VIEW */}
+          {activeTab === "queue" && (
+            <section className="panel operations-panel">
+              <div className="panel-header">
+                <div className="panel-title-group">
+                  <span className="panel-badge highlight">FR-3.6 VIRTUAL QUEUE SYSTEM</span>
+                  <h2>Virtual Waiting Queue</h2>
+                  <p className="panel-subtitle">
+                    {isFacilityFull ? (
+                      <span style={{ color: "var(--danger-primary)", fontWeight: 700 }}>
+                        🔴 100% Facility Capacity Reached! All {PARKING_LOT_SLOTS.length} slots are filled. Virtual queue is open.
+                      </span>
+                    ) : (
+                      <span style={{ color: "var(--primary-600)", fontWeight: 600 }}>
+                        🟢 Direct Reservation Available: {vacantSlotsCount} of {PARKING_LOT_SLOTS.length} slot(s) are currently vacant. Virtual queue opens only when all slots are filled.
+                      </span>
+                    )}
+                  </p>
+                </div>
+                <div style={{ display: "flex", gap: "10px", alignItems: "center" }}>
+                  {!isFacilityFull && (
+                    <button
+                      className="secondary-button"
+                      onClick={() => navigateToTab("dashboard")}
+                    >
+                      📊 Book Slot Directly ({vacantSlotsCount} Available)
+                    </button>
+                  )}
+                  <button
+                    className="primary-button"
+                    disabled={!isFacilityFull}
+                    onClick={handleJoinQueue}
+                    title={
+                      !isFacilityFull
+                        ? `Cannot join queue: ${vacantSlotsCount} slot(s) are still vacant. Direct reservation is available.`
+                        : "Join the virtual waiting queue"
+                    }
+                  >
+                    {isFacilityFull ? "+ Join Waiting Queue" : "🔒 Queue Locked (Slots Available)"}
+                  </button>
+                </div>
+              </div>
+
+              <div className="table-responsive">
+                <table className="cpos-table">
+                  <thead>
+                    <tr>
+                      <th>Position #</th>
+                      <th>Driver / User</th>
+                      <th>Status</th>
+                      <th>Joined Time</th>
+                      <th>Queue Action</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {queueData.length === 0 ? (
+                      <tr><td colSpan={5} className="text-center">No drivers currently in waiting queue.</td></tr>
+                    ) : (
+                      queueData.map((q) => (
+                        <tr key={q.queue_id}>
+                          <td><span className="id-badge">#{q.queue_number}</span></td>
+                          <td><strong>{q.full_name}</strong> ({q.email})</td>
+                          <td><span className="status-pill status-active">{q.queue_status}</span></td>
+                          <td>{formatDate(q.joined_at)}</td>
+                          <td>
+                            {isStaff ? (
+                              <button
+                                className="small-button btn-cancel"
+                                onClick={() => handleRemoveQueueMember(q.queue_id)}
+                                title="Operator / Manager action: Remove member from waiting queue"
+                              >
+                                ✕ Remove Member
+                              </button>
+                            ) : q.user_id === user?.user_id ? (
+                              <button
+                                className="small-button btn-cancel"
+                                onClick={() => handleRemoveQueueMember(q.queue_id)}
+                                title="Customer action: Leave the virtual waiting queue"
+                              >
+                                ✕ Leave Queue
+                              </button>
+                            ) : (
+                              <span className="text-muted">—</span>
+                            )}
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </section>
+          )}
+
+          {/* MODULE 3.7: DIGITAL VALET MANAGEMENT VIEW */}
+          {activeTab === "valet" && (
+            <section className="panel operations-panel">
+              <div className="panel-header">
+                <div className="panel-title-group">
+                  <span className="panel-badge highlight">FR-3.7 DIGITAL VALET SYSTEM</span>
+                  <h2>Valet Vehicle Management</h2>
+                  <p className="panel-subtitle">Assign vehicles to staff, track key tags, and dispatch retrieval requests.</p>
+                </div>
+              </div>
+
+              <div className="table-responsive">
+                <table className="cpos-table">
+                  <thead>
+                    <tr>
+                      <th>Valet ID</th>
+                      <th>Vehicle Number</th>
+                      <th>Key Tag</th>
+                      <th>Staff Name</th>
+                      <th>Status</th>
+                      <th>Action</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {valetData.length === 0 ? (
+                      <tr><td colSpan={6} className="text-center">No active valet vehicle records found.</td></tr>
+                    ) : (
+                      valetData.map((v) => (
+                        <tr key={v.valet_id}>
+                          <td>#{v.valet_id}</td>
+                          <td><strong>{v.vehicle_number}</strong> ({v.model})</td>
+                          <td><span className="slot-badge">Tag {v.key_tag_number}</span></td>
+                          <td>{v.valet_staff_name}</td>
+                          <td><span className="status-pill status-active">{v.valet_status}</span></td>
+                          <td>
+                            {!v.retrieval_requested ? (
+                              <button
+                                className="small-button btn-confirm"
+                                onClick={() => handleValetRetrieval(v.valet_id)}
+                              >
+                                Request Retrieval
+                              </button>
+                            ) : (
+                              <span className="text-muted">Retrieval Dispatched</span>
+                            )}
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </section>
+          )}
+
+          {/* MODULE 3.8: VIOLATIONS & PENALTY MANAGEMENT VIEW */}
+          {activeTab === "violations" && (
+            <section className="panel operations-panel">
+              <div className="panel-header">
+                <div className="panel-title-group">
+                  <span className="panel-badge highlight">FR-3.8 VIOLATION & PENALTY ENGINE</span>
+                  <h2>Parking Violations & Disputes</h2>
+                  <p className="panel-subtitle">Record parking violations, generate fine notices, and manage disputes.</p>
+                </div>
+              </div>
+
+              {isStaff && (
+                <div className="violation-form-card">
+                  <h3>Issue Violation Notice</h3>
+                  <form onSubmit={handleIssueViolation} className="form-row">
+                    <div className="form-group">
+                      <label>License Plate #:</label>
+                      <input
+                        required
+                        placeholder="e.g. TN-07-AB-1234"
+                        value={violationForm.vehicle_number}
+                        onChange={(e) => setViolationForm({...violationForm, vehicle_number: e.target.value})}
+                      />
+                    </div>
+                    <div className="form-group">
+                      <label>Violation Type:</label>
+                      <select
+                        value={violationForm.violation_type}
+                        onChange={(e) => setViolationForm({...violationForm, violation_type: e.target.value})}
+                      >
+                        <option value="OVERSTAY">Overstay Duration Exceeded</option>
+                        <option value="UNAUTHORIZED">Unauthorized / Double Parking</option>
+                        <option value="BLOCKED_FIRE_LANE">Blocking Emergency / EV Bay</option>
+                      </select>
+                    </div>
+                    <div className="form-group">
+                      <label>Fine Amount ($):</label>
+                      <input
+                        type="number"
+                        min="10"
+                        value={violationForm.fine_amount}
+                        onChange={(e) => setViolationForm({...violationForm, fine_amount: Number(e.target.value)})}
+                      />
+                    </div>
+                    <div className="form-group" style={{ alignSelf: "flex-end" }}>
+                      <button type="submit" className="primary-button">
+                        Issue Penalty
+                      </button>
+                    </div>
+                  </form>
+                </div>
+              )}
+
+              <div className="table-responsive">
+                <table className="cpos-table">
+                  <thead>
+                    <tr>
+                      <th>Notice #</th>
+                      <th>Vehicle Plate</th>
+                      <th>Violation Type</th>
+                      <th>Penalty Fee</th>
+                      <th>Status</th>
+                      <th>Dispute Reason</th>
+                      <th>Action</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {violationsData.length === 0 ? (
+                      <tr><td colSpan={7} className="text-center">No violations recorded.</td></tr>
+                    ) : (
+                      violationsData.map((viol) => (
+                        <tr key={viol.violation_id}>
+                          <td><span className="id-badge audit">#{viol.violation_id}</span></td>
+                          <td><strong>{viol.vehicle_number}</strong></td>
+                          <td>{viol.violation_type}</td>
+                          <td><strong>${Number(viol.fine_amount).toFixed(2)}</strong></td>
+                          <td><span className="status-pill status-active">{viol.penalty_status}</span></td>
+                          <td>{viol.dispute_reason || "None"}</td>
+                          <td>
+                            {viol.penalty_status === "ISSUED" && (
+                              <button
+                                className="small-button btn-cancel"
+                                onClick={() => handleDisputeViolation(viol.violation_id)}
+                              >
+                                Submit Dispute
+                              </button>
+                            )}
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </section>
+          )}
+
+          {/* MODULE 3.9: REPORTS & ANALYTICS VIEW */}
+          {activeTab === "analytics" && (role === "BRANCH_MANAGER" || isSuperAdmin) && (
+            <section className="panel operations-panel">
+              <div className="panel-header">
+                <div className="panel-title-group">
+                  <span className="panel-badge highlight">FR-3.9 REPORTS & ANALYTICS</span>
+                  <h2>Facility Utilization & Financial Performance</h2>
+                  <p className="panel-subtitle">Real-time operational metrics and digital financial summaries.</p>
+                </div>
+                <button
+                  className="secondary-button"
+                  onClick={() => window.print()}
+                  title="Print / Export Report as PDF"
+                >
+                  📄 Export Report (PDF)
+                </button>
+              </div>
+
+              {analyticsData ? (
+                <div className="analytics-grid">
+                  <div className="analytics-card">
+                    <span className="analytics-metric-title">Facility Occupancy Rate</span>
+                    <span className="analytics-metric-val">{analyticsData.occupancy_rate}</span>
+                    <span className="text-muted text-xs">{analyticsData.occupied_slots} occupied of {analyticsData.total_slots} total bays</span>
+                  </div>
+                  <div className="analytics-card">
+                    <span className="analytics-metric-title">Gross Revenue Generated</span>
+                    <span className="analytics-metric-val">${Number(analyticsData.total_revenue).toFixed(2)}</span>
+                    <span className="text-muted text-xs">{analyticsData.total_invoices} digital invoices billed</span>
+                  </div>
+                  <div className="analytics-card">
+                    <span className="analytics-metric-title">Total Processed Bookings</span>
+                    <span className="analytics-metric-val">{analyticsData.reservations?.total_reservations || 0}</span>
+                    <span className="text-muted text-xs">{analyticsData.reservations?.active_reservations || 0} active · {analyticsData.reservations?.completed_reservations || 0} checked out</span>
+                  </div>
+                </div>
+              ) : (
+                <div className="loading-state">
+                  <span className="spinner"></span>
+                  <p>Calculating live facility analytics...</p>
+                </div>
+              )}
+            </section>
+          )}
+
+          {/* 404 NOT FOUND VIEW */}
+          {activeTab === "404" && (
+            <section className="panel not-found-panel">
+              <div className="not-found-content">
+                <div className="not-found-badge">404 ERROR</div>
+                <h2 className="not-found-title">Page Not Found</h2>
+                <p className="not-found-desc">
+                  The requested route <code>/{currentRoutePath}</code> does not exist, was moved, or requires privileges not assigned to your current role ({user.role}).
+                </p>
+                <div className="not-found-actions">
+                  <button
+                    className="primary-button"
+                    onClick={() => navigateToTab("dashboard")}
+                  >
+                    ← Return to Core Dashboard
+                  </button>
+                </div>
+              </div>
+            </section>
+          )}
+
+          {/* MODAL: QR CODE & OTP ENTRY PASS (FR-3.3) */}
+          {modalQrData && (
+            <div className="modal-overlay" onClick={() => setModalQrData(null)}>
+              <div className="modal-dialog" onClick={(e) => e.stopPropagation()}>
+                <div className="modal-header">
+                  <h3>🎟️ Smart Entry Pass (Booking #{modalQrData.booking_id})</h3>
+                  <button className="modal-close-btn" onClick={() => setModalQrData(null)}>×</button>
+                </div>
+                <div className="modal-body qr-modal-body">
+                  <div className="qr-box-visual">
+                    <div className="qr-mock-code">
+                      <div className="qr-scan-line"></div>
+                      <div className="qr-corner tl"></div>
+                      <div className="qr-corner tr"></div>
+                      <div className="qr-corner bl"></div>
+                      <div className="qr-corner br"></div>
+                      <span className="qr-text-tag">{modalQrData.qr_code}</span>
+                    </div>
+                  </div>
+                  <div className="otp-display-box">
+                    <span className="otp-label">Entrance Gate 6-Digit OTP:</span>
+                    <strong className="otp-code-large">{modalQrData.otp}</strong>
+                    <span className="otp-hint">Present this QR code or 6-digit OTP to the parking gate operator upon arrival.</span>
+                  </div>
+                  <div className="modal-info-pills">
+                    <span>Slot Allocated: <strong>#{modalQrData.slot_id}</strong></span>
+                    <span>Status: <strong>{modalQrData.verification_status}</strong></span>
+                  </div>
+                </div>
+                <div className="modal-footer">
+                  <button className="primary-button" onClick={() => setModalQrData(null)}>Done</button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* MODAL: DIGITAL INVOICE (FR-3.4) */}
+          {modalInvoiceData && (
+            <div className="modal-overlay" onClick={() => setModalInvoiceData(null)}>
+              <div className="modal-dialog" onClick={(e) => e.stopPropagation()}>
+                <div className="modal-header">
+                  <h3>📄 Digital Parking Invoice</h3>
+                  <button className="modal-close-btn" onClick={() => setModalInvoiceData(null)}>×</button>
+                </div>
+                <div className="modal-body invoice-modal-body">
+                  <div className="invoice-receipt-card">
+                    <div className="invoice-top">
+                      <div>
+                        <strong>CPOS Operations Facility</strong>
+                        <div className="text-muted text-xs">Tax ID: CPOS-TAX-98240</div>
+                      </div>
+                      <div className="invoice-num-tag">{modalInvoiceData.invoice_number}</div>
+                    </div>
+                    <hr className="receipt-divider" />
+                    <div className="receipt-row">
+                      <span>Parking Reservation Fee</span>
+                      <span>${Number(modalInvoiceData.subtotal || 22.73).toFixed(2)}</span>
+                    </div>
+                    <div className="receipt-row">
+                      <span>Service Tax (10%)</span>
+                      <span>${Number(modalInvoiceData.tax || 2.27).toFixed(2)}</span>
+                    </div>
+                    <hr className="receipt-divider" />
+                    <div className="receipt-row total-row">
+                      <strong>Total Paid</strong>
+                      <strong className="receipt-total-val">${Number(modalInvoiceData.total_amount || 25.00).toFixed(2)}</strong>
+                    </div>
+                    <div className="receipt-footer-tag">
+                      ✅ Paid via {modalInvoiceData.payment_method || "CARD"} · Ref: {modalInvoiceData.transaction_reference || "TXN-APPROVED"}
+                    </div>
+                  </div>
+                </div>
+                <div className="modal-footer">
+                  <button className="secondary-button" onClick={() => window.print()}>Print Receipt</button>
+                  <button className="primary-button" onClick={() => setModalInvoiceData(null)}>Close</button>
+                </div>
+              </div>
+            </div>
           )}
 
           {/* Clean Dashboard Footer */}

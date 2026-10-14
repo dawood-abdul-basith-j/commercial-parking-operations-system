@@ -8,6 +8,7 @@ const cors = require("cors");
 const bookingRoutes = require("./routes/bookingRoutes");
 const authRoutes = require("./routes/authRoutes");
 const auditRoutes = require("./routes/auditRoutes");
+const operationsRoutes = require("./routes/operationsRoutes");
 
 const app = express();
 
@@ -17,6 +18,7 @@ app.use(express.json({ limit: "20kb" }));
 app.use("/api/auth", authRoutes);
 app.use("/api/bookings", bookingRoutes);
 app.use("/api/audit-logs", auditRoutes);
+app.use("/api/operations", operationsRoutes);
 
 
 // Health-check API
