@@ -1,0 +1,10 @@
+{
+  "name": "commercial-parking-operations-system",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "test": "npm test --if-present --prefix backend",
+    "test:frontend": "npm test --if-present --prefix frontend",
+    "test:all": "npm run test && npm run test:frontend"
+  }
+}

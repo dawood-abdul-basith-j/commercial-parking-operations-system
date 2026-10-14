@@ -89,4 +89,86 @@ export const api = {
 
   getAuditLogs: (token, page = 1, limit = 10) =>
     request(`/api/audit-logs?page=${page}&limit=${limit}`, { token }),
+
+  // Module 3.3: QR & Entry Management
+  getQrCode: (token, bookingId) =>
+    request(`/api/operations/qr/${bookingId}`, { token }),
+
+  verifyEntry: (token, data) =>
+    request("/api/operations/entry/verify", {
+      token,
+      method: "POST",
+      body: data,
+    }),
+
+  verifyExit: (token, data) =>
+    request("/api/operations/exit/verify", {
+      token,
+      method: "POST",
+      body: data,
+    }),
+
+  // Module 3.4: Payments & Invoices
+  processPayment: (token, data) =>
+    request("/api/operations/payments/process", {
+      token,
+      method: "POST",
+      body: data,
+    }),
+
+  getInvoices: (token, bookingId) =>
+    request(`/api/operations/invoices/booking/${bookingId}`, { token }),
+
+  // Module 3.5: Pricing
+  getPricing: (token) =>
+    request("/api/operations/pricing", { token }),
+
+  // Module 3.6: Virtual Queue
+  getQueue: (token) =>
+    request("/api/operations/queue", { token }),
+
+  joinQueue: (token) =>
+    request("/api/operations/queue/join", {
+      token,
+      method: "POST",
+    }),
+
+  removeQueueMember: (token, queueId) =>
+    request(`/api/operations/queue/${queueId}`, {
+      token,
+      method: "DELETE",
+    }),
+
+  // Module 3.7: Valet
+  getValetTasks: (token) =>
+    request("/api/operations/valet", { token }),
+
+  requestValetRetrieval: (token, valet_id) =>
+    request("/api/operations/valet/request-retrieval", {
+      token,
+      method: "POST",
+      body: { valet_id },
+    }),
+
+  // Module 3.8: Violations
+  getViolations: (token) =>
+    request("/api/operations/violations", { token }),
+
+  issueViolation: (token, data) =>
+    request("/api/operations/violations/issue", {
+      token,
+      method: "POST",
+      body: data,
+    }),
+
+  disputeViolation: (token, data) =>
+    request("/api/operations/violations/dispute", {
+      token,
+      method: "POST",
+      body: data,
+    }),
+
+  // Module 3.9: Analytics
+  getAnalytics: (token) =>
+    request("/api/operations/analytics/summary", { token }),
 };

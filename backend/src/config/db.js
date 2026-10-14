@@ -10,6 +10,24 @@ require("dotenv").config({
 // Require an explicit database name to avoid accidental connections
 // to the wrong database.
 if (!process.env.DB_NAME) {
+  if (process.env.NODE_ENV === "test" || process.env.CI) {
+    console.warn(
+      "⚠️ DB_NAME is missing; running in test/CI mode without a real DB. Ensure tests mock the DB or set DB_* env vars in CI."
+    );
+    module.exports = {
+      getConnection: async () => {
+        throw new Error("No database configured in test/CI environment.");
+      },
+      query: async () => {
+        throw new Error("No database configured in test/CI environment.");
+      },
+      execute: async () => {
+        throw new Error("No database configured in test/CI environment.");
+      },
+      end: async () => {},
+    };
+    return;
+  }
   throw new Error(
     "DB_NAME is missing from backend/.env. Database connection aborted."
   );
