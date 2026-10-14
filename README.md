@@ -1,7 +1,7 @@
 # Commercial Parking Operations System (CPOS)
 
-[![CI Pipeline](https://github.com/dawoodabdulbasith/commercial-parking-operations-system/actions/workflows/ci.yml/badge.svg)](https://github.com/dawoodabdulbasith/commercial-parking-operations-system/actions)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![CI Pipeline](https://github.com/dawood-abdul-basith-j/commercial-parking-operations-system/actions/workflows/ci.yml/badge.svg)](https://github.com/dawood-abdul-basith-j/commercial-parking-operations-system/actions)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![Node.js](https://img.shields.io/badge/Node.js-18%2B-green.svg)](https://nodejs.org/)
 [![React](https://img.shields.io/badge/React-18-blue.svg)](https://react.dev/)
 [![MySQL](https://img.shields.io/badge/MySQL-8.0%2B-orange.svg)](https://www.mysql.com/)
